@@ -2,10 +2,11 @@
 
 O A.C.E. é um assistente para Windows com conversas, memória e pesquisa. Você pode usar um modelo no seu computador ou ativar a Cloudflare para conversar online. A memória, o grafo de conhecimento e as fontes que você salvou ficam no computador e podem ser consultados sem modelo.
 
-## Instalar no Windows
+## [Baixar o instalador do A.C.E. para Windows (.exe)](https://github.com/renato-chagas/A.C.E/releases/latest/download/Instalar-A.C.E.exe)
 
-1. Baixe e abra o [instalador do A.C.E. para Windows de 64 bits](https://github.com/renato-chagas/A.C.E/releases/latest/download/Instalar-A.C.E.exe).
-2. Abra **Configure model** no aplicativo e siga o guia da opção escolhida. Para começar pela memória e pelas fontes já salvas, escolha **Continue with local services**.
+Abra `Instalar-A.C.E.exe` no Windows de 64 bits. Esse arquivo instala o aplicativo, o serviço local em Python e o WebView2.
+
+Na primeira abertura, escolha **Configure model** para ativar um modelo de conversa ou **Continue with local services** para usar a memória e consultar as fontes salvas.
 
 O [launcher opcional](https://github.com/renato-chagas/A.C.E/releases/latest/download/Iniciar-ACE.cmd) abre o A.C.E. instalado. Quando estiver na mesma pasta do instalador, também pode iniciar a instalação.
 
