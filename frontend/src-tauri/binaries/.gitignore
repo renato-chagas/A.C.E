@@ -1,0 +1,4 @@
+# Downloaded sidecar binaries — platform-specific, not committed
+ollama-*
+!.gitignore
+/ace-backend/

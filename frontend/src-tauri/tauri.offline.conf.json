@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "A.C.E.",
+  "version": "1.0.6",
+  "identifier": "com.openjarvis.ace.offline",
+  "build": {
+    "features": [
+      "windows-offline"
+    ]
+  },
+  "bundle": {
+    "targets": [
+      "nsis"
+    ],
+    "resources": {
+      "binaries/ace-backend/": "ace-backend/"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller",
+        "silent": true
+      },
+      "nsis": {
+        "template": "nsis/installer.nsi",
+        "languages": [
+          "PortugueseBR",
+          "English"
+        ]
+      }
+    },
+    "shortDescription": "A.C.E. personal assistant",
+    "longDescription": "Desktop assistant with local memory, research, and a choice of local or online inference.",
+    "publisher": "A.C.E."
+  },
+  "plugins": {
+    "updater": {
+      "active": false
+    }
+  }
+}
