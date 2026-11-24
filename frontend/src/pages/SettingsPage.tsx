@@ -40,7 +40,8 @@ import {
   type MemoryStats,
 } from '../lib/api';
 import { isAutoUpdateDisabled, setAutoUpdateDisabled } from '../components/Desktop/UpdateChecker';
-import { CloudflareSetupGuide, CustomServerSetupGuide, OllamaSetupGuide } from '../components/InferenceSourceSetup';
+import { CustomServerSetupGuide, OllamaSetupGuide } from '../components/InferenceSourceSetup';
+import { CloudflareSetupForm } from '../components/CloudflareSetupForm';
 import { isOfflineDistribution } from '../lib/desktop-startup';
 
 const CLOUD_KEY_STATUS_CHANGED = 'openjarvis-cloud-key-status-changed';
@@ -453,6 +454,8 @@ export function SettingsPage({ localServicesOnly = false, onConfigureModel }: {
   });
 
   const [srcKind, setSrcKind] = useState<InferenceSource['kind']>('ollama');
+  const [cloudflareModel, setCloudflareModel] = useState(CLOUDFLARE_GEMMA_MODEL);
+  const [cloudflareBusy, setCloudflareBusy] = useState(false);
   const [ollamaModel, setOllamaModel] = useState('');
   const [customHost, setCustomHost] = useState('http://localhost:1234/v1');
   const [customModel, setCustomModel] = useState('');
@@ -465,6 +468,7 @@ export function SettingsPage({ localServicesOnly = false, onConfigureModel }: {
     getInferenceSource().then((s) => {
       setSrcKind(s.kind);
       if (s.kind === 'ollama' && s.model) setOllamaModel(s.model);
+      if (s.kind === 'cloudflare' && s.model) setCloudflareModel(s.model);
       if (s.kind === 'custom') {
         if (s.host) setCustomHost(s.host);
         if (s.model) setCustomModel(s.model);
@@ -475,9 +479,7 @@ export function SettingsPage({ localServicesOnly = false, onConfigureModel }: {
 
   const saveSource = useCallback(async () => {
     try {
-      if (srcKind === 'cloudflare') {
-        await setInferenceSource({ kind: 'cloudflare', model: CLOUDFLARE_GEMMA_MODEL });
-      } else if (srcKind === 'custom') {
+      if (srcKind === 'custom') {
         await setInferenceSource({
           kind: 'custom',
           host: customHost,
@@ -717,13 +719,14 @@ export function SettingsPage({ localServicesOnly = false, onConfigureModel }: {
               <select
                 aria-label="Inference source"
                 value={srcKind}
+                disabled={cloudflareBusy}
                 onChange={(e) => { setSrcKind(e.target.value as InferenceSource['kind']); setSrcMsg(''); }}
                 className="text-sm px-3 py-1.5 rounded-lg outline-none w-56"
                 style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
               >
                 <option value="ollama">Local Ollama</option>
                 <option value="custom">Custom OpenAI-compatible server</option>
-                <option value="cloudflare">Cloudflare · Gemma 4 (online)</option>
+                <option value="cloudflare">Cloudflare Workers AI (online)</option>
               </select>
             </SettingRow>
             {srcKind === 'ollama' && <div className="py-3"><OllamaSetupGuide inSettings /></div>}
@@ -777,21 +780,31 @@ export function SettingsPage({ localServicesOnly = false, onConfigureModel }: {
                 </SettingRow>}
               </>
             )}
-            {srcKind === 'cloudflare' && (
-              <div className="space-y-2 py-3">
-                <p className="break-all text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                  <code>{CLOUDFLARE_GEMMA_MODEL}</code>
-                </p>
-                <CloudflareSetupGuide inSettings />
+            {srcKind === 'cloudflare' ? (
+              <div className="py-3">
+                <CloudflareSetupForm
+                  inSettings
+                  initialModel={cloudflareModel}
+                  onBusyChange={setCloudflareBusy}
+                  onConfirm={async (model) => {
+                    try {
+                      await setInferenceSource({ kind: 'cloudflare', model });
+                      setCloudflareModel(model);
+                    } catch {
+                      throw new Error('Could not save the Cloudflare inference source.');
+                    }
+                  }}
+                />
               </div>
+            ) : (
+              <SettingRow label="" description={srcMsg}>
+                <button onClick={saveSource}
+                  className="text-sm px-3 py-1.5 rounded-lg outline-none cursor-pointer"
+                  style={{ background: 'var(--color-accent, var(--color-accent-subtle))', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>
+                  Save inference source
+                </button>
+              </SettingRow>
             )}
-            <SettingRow label="" description={srcMsg}>
-              <button onClick={saveSource}
-                className="text-sm px-3 py-1.5 rounded-lg outline-none cursor-pointer"
-                style={{ background: 'var(--color-accent, var(--color-bg-tertiary))', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>
-                {srcKind === 'cloudflare' ? 'Save Cloudflare for next launch' : 'Save inference source'}
-              </button>
-            </SettingRow>
           </Section>
 
           {/* Models */}

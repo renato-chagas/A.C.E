@@ -1,17 +1,18 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CloudflareSetupForm } from './CloudflareSetupForm';
 import {
   CloudflareConsent,
-  CloudflareSetupGuide,
   CustomEndpointSetup,
   InferenceRecoveryButton,
   InferenceSourceChooser,
   OllamaConsent,
-  cloudflarePowerShellCommand,
   inferenceSetupReducer,
   persistAndStartInferenceSource,
   type InferenceSourceSubmission,
 } from './InferenceSourceSetup';
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('first-run inference source navigation', () => {
   it('requires a second, explicit confirmation before local setup', () => {
@@ -29,41 +30,48 @@ describe('first-run inference source navigation', () => {
 
     expect(html).toContain('Local Ollama');
     expect(html).toContain('OpenAI-compatible server');
-    expect(html).toContain('Cloudflare · Gemma 4');
+    expect(html).toContain('Cloudflare Workers AI');
     expect(html).toContain('Nothing is installed, started, or downloaded until you confirm');
     expect(html).not.toContain('Starting local setup');
   });
 
-  it('discloses online chat before a separate Cloudflare confirmation', () => {
+  it('discloses online chat and shows masked credential fields on desktop', () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
     expect(inferenceSetupReducer('choose', 'choose_cloudflare')).toBe('cloudflare');
     expect(inferenceSetupReducer('cloudflare', 'back')).toBe('choose');
     const html = renderToStaticMarkup(<CloudflareConsent onBack={vi.fn()} onConfirm={vi.fn()} />);
-    expect(html).toContain('@cf/google/gemma-4-26b-a4b-it');
+
     expect(html).toContain('sends messages and conversation history to Cloudflare Workers AI');
-    expect(html).toContain('CLOUDFLARE_ACCOUNT_ID');
-    expect(html).toContain('CLOUDFLARE_API_TOKEN');
-    expect(html).toContain('Use REST API');
-    expect(html).toContain('Sair do A.C.E.');
-    expect(html).toContain('Copy PowerShell setup');
-    expect(html).toContain('-AsSecureString');
+    expect(html).toContain('Cloudflare Account ID');
+    expect(html).toContain('Workers AI API Token');
+    expect(html).toContain('type="password"');
     expect(html).toContain('Connect to Cloudflare');
+    expect(html).toContain('Use REST API');
+    expect(html).toContain('Cloudflare model');
+    expect(html).toContain('value="@cf/google/gemma-4-26b-a4b-it" selected');
+    expect(html).toContain('@cf/qwen/qwen3.8-27b');
+    expect(html).toContain('@cf/openai/gpt-oss-20b');
+    expect(html).toContain('Enter model ID');
+    expect(html).not.toContain('PowerShell');
+  });
+
+  it('restores a custom model choice in settings without prefilling any credentials', () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const html = renderToStaticMarkup(
+      <CloudflareSetupForm inSettings initialModel="@hf/provider/custom-model" onConfirm={vi.fn()} />,
+    );
+    expect(html).toContain('value="custom" selected');
+    expect(html).toContain('Cloudflare model ID');
+    expect(html).toContain('value="@hf/provider/custom-model"');
+    expect(html).toContain('Save Cloudflare for next launch');
+    expect(html).not.toMatch(/<input[^>]*type="password"[^>]*value=/);
+  });
+
+  it('directs browser users to desktop before entering Cloudflare credentials', () => {
+    const html = renderToStaticMarkup(<CloudflareConsent onBack={vi.fn()} onConfirm={vi.fn()} />);
+    expect(html).toContain('Open the A.C.E. desktop app to configure Cloudflare.');
     expect(html).not.toContain('<input');
-  });
-
-  it('tells users to save Cloudflare before restarting from Settings', () => {
-    const html = renderToStaticMarkup(<CloudflareSetupGuide inSettings />);
-
-    expect(html.indexOf('Save Cloudflare for next launch')).toBeLessThan(html.indexOf('Sair do A.C.E.'));
-  });
-
-  it('prompts for both credentials before launching the exact executable path', () => {
-    const commands = cloudflarePowerShellCommand("D:\\Pat's Apps\\A.C.E.\\openjarvis-desktop.exe");
-
-    expect(commands).toContain("Read-Host 'Cloudflare Account ID'");
-    expect(commands).toContain("Read-Host 'Workers AI API token' -AsSecureString");
-    expect(commands).toContain("Start-Process -FilePath 'D:\\Pat''s Apps\\A.C.E.\\openjarvis-desktop.exe'");
-    expect(commands.indexOf('$env:CLOUDFLARE_API_TOKEN')).toBeLessThan(commands.indexOf('Start-Process'));
-    expect(cloudflarePowerShellCommand()).toContain("Read-Host 'Full path to openjarvis-desktop.exe'");
+    expect(html).not.toContain('Connect to Cloudflare');
   });
 
   it('requires the exact model tag and discloses what the download consent covers', () => {

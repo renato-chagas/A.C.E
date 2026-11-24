@@ -184,7 +184,7 @@ def _serve_cloudflare_chat(
     model: str | None,
     agent: str | None,
 ) -> None:
-    from openjarvis.engine.cloudflare import CLOUDFLARE_MODEL_ID
+    from openjarvis.engine.cloudflare import CLOUDFLARE_MODEL_ID, is_cloudflare_model_id
     from openjarvis.server.daemon import run_server
     from openjarvis.server.local_services import create_local_services_app
 
@@ -195,14 +195,17 @@ def _serve_cloudflare_chat(
         loopback = False
     if not loopback:
         raise click.UsageError("O modo Cloudflare do ACE requer um endereço loopback.")
-    if model not in (None, CLOUDFLARE_MODEL_ID):
-        raise click.UsageError(f"O modelo Cloudflare do ACE é {CLOUDFLARE_MODEL_ID}.")
+    selected_model = CLOUDFLARE_MODEL_ID if model is None else model.strip()
+    if not is_cloudflare_model_id(selected_model):
+        raise click.UsageError(
+            "Informe o ID exato de um modelo de conversa da Cloudflare Workers AI."
+        )
     if agent not in (None, "simple"):
         raise click.UsageError("O modo Cloudflare do ACE oferece conversa em texto.")
 
     config = deepcopy(config)
     config.intelligence.provider = "cloudflare"
-    resolved = get_configured_engine(config, "cloudflare", model=CLOUDFLARE_MODEL_ID)
+    resolved = get_configured_engine(config, "cloudflare", model=selected_model)
     # The selected engine has captured its credentials. Other local services
     # can spawn workers in this process and must not inherit those credentials.
     _strip_cloudflare_credentials()
@@ -216,6 +219,7 @@ def _serve_cloudflare_chat(
         config,
         api_key=_load_server_api_key(),
         cloudflare_engine=engine,
+        cloudflare_model=selected_model,
     )
     bind_port = port if port is not None else config.server.port
     run_server(app, host=bind_host, port=bind_port, log_level="info")

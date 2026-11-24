@@ -187,6 +187,39 @@ def test_only_the_exact_first_text_choice_is_accepted(
     assert _TOKEN not in str(caught.value)
 
 
+@pytest.mark.asyncio
+async def test_alternative_models_use_cloudflare_chat_completion(
+    configured, transport_factory
+):
+    selected = "@cf/openai/gpt-oss-20b"
+
+    def answer(request):
+        expected_path = f"/client/v4/accounts/{_ACCOUNT}/ai/v1/chat/completions"
+        assert request.url.path == expected_path
+        assert request.headers["authorization"] == f"Bearer {_TOKEN}"
+        assert json.loads(request.content) == {
+            "model": selected,
+            "messages": [{"role": "user", "content": _MESSAGES[0].text}],
+            "temperature": 0.7,
+            "max_tokens": 1024,
+            "stream": False,
+            "store": False,
+        }
+        return httpx.Response(
+            200, json={"choices": [{"message": {
+                "content": "Até logo!", "reasoning_content": "Fixture only",
+            }}]}
+        )
+
+    transport_factory(answer)
+    assert configured.can_serve(selected)
+    reply = configured.generate(_MESSAGES, model=selected)
+    assert reply["model"] == selected and reply["content"] == "Até logo!"
+    assert [
+        text async for text in configured.stream(_MESSAGES, model=selected)
+    ] == ["Até logo!"]
+
+
 def test_unapproved_inputs_and_missing_credential_are_rejected_before_http(
     configured, monkeypatch, transport_factory
 ):
@@ -194,9 +227,10 @@ def test_unapproved_inputs_and_missing_credential_are_rejected_before_http(
         pytest.fail("unexpected Cloudflare request")
 
     transport_factory(unexpected_request)
-    with pytest.raises(CloudflareInferenceError) as wrong_model:
-        configured.generate(_MESSAGES, model="alternate/model")
-    assert wrong_model.value.status_code == 400
+    for model in ("alternate/model", "@cf/qwen/../escape", "@cf/qwen/foo?", ""):
+        with pytest.raises(CloudflareInferenceError) as wrong_model:
+            configured.generate(_MESSAGES, model=model)
+        assert wrong_model.value.status_code == 400
     with pytest.raises(CloudflareInferenceError) as tools:
         configured.generate(
             _MESSAGES, model=CLOUDFLARE_MODEL_ID, tools=[{"type": "function"}]

@@ -10,6 +10,8 @@ pub(crate) struct AttachedBackend {
     pub(crate) pid: u32,
     pub(crate) started_at: String,
     pub(crate) mode: AttachedBackendMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cloudflare_model: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]

@@ -11,7 +11,7 @@ describe('desktop local model settings', () => {
     expect(html).toContain('aria-label="Ollama model tag to install"');
     expect(html).toContain('aria-label="Ollama model tag"');
     expect(html).toContain('Startup model');
-    expect(html).toContain('<option value="cloudflare">Cloudflare · Gemma 4 (online)</option>');
+    expect(html).toContain('<option value="cloudflare">Cloudflare Workers AI (online)</option>');
     expect(html).toContain('Install model');
     expect(html).toContain('https://ollama.com/library');
     expect(html).toContain('You choose the Ollama model tag.');

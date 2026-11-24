@@ -164,7 +164,7 @@ export function Sidebar({ onConfigureModel }: { onConfigureModel?: () => void })
                 className="truncate block text-left"
                 style={{ color: deepResearch ? 'var(--color-accent)' : 'var(--color-text)' }}
               >
-                {onConfigureModel ? 'Configure model' : cloudflareOnline ? 'Cloudflare · Gemma 4'
+                {onConfigureModel ? 'Configure model' : cloudflareOnline ? `Cloudflare · ${serverInfo?.model?.split('/').pop() || 'Workers AI'}`
                   : deepResearch ? 'Deep Research' : selectedModel || serverInfo?.model || 'Select model'}
               </span>
               {modelLoading && (

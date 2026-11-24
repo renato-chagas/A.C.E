@@ -1326,6 +1326,36 @@ export async function denyAction(
 
 export const CLOUDFLARE_GEMMA_MODEL = '@cf/google/gemma-4-26b-a4b-it';
 
+export type CloudflareCredentialStatus = 'stored' | 'environment' | 'missing';
+
+async function invokeCloudflareCredentialCommand<T>(command: string, args?: Record<string, string>): Promise<T> {
+  if (!isTauri()) throw new Error('Open the A.C.E. desktop app to configure Cloudflare.');
+  const { invoke } = await import('@tauri-apps/api/core');
+  return args ? invoke<T>(command, args) : invoke<T>(command);
+}
+
+export async function getCloudflareCredentialsStatus(): Promise<CloudflareCredentialStatus> {
+  const status = await invokeCloudflareCredentialCommand<unknown>('get_cloudflare_credentials_status');
+  if (status === 'stored' || status === 'environment' || status === 'missing') return status;
+  throw new Error('Could not read Cloudflare credential status.');
+}
+
+export async function saveCloudflareCredentials(accountId: string, apiToken: string): Promise<void> {
+  try {
+    await invokeCloudflareCredentialCommand('save_cloudflare_credentials', { accountId, apiToken });
+  } catch {
+    throw new Error('Could not save Cloudflare credentials in your system credential store.');
+  }
+}
+
+export async function removeCloudflareCredentials(): Promise<void> {
+  try {
+    await invokeCloudflareCredentialCommand('remove_cloudflare_credentials');
+  } catch {
+    throw new Error('Could not remove Cloudflare credentials from your system credential store.');
+  }
+}
+
 export type InferenceSource = {
   kind: 'ollama' | 'custom' | 'cloudflare';
   model?: string;
@@ -1353,7 +1383,7 @@ export async function setInferenceSource(
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     const selection = src.kind === 'cloudflare'
-      ? { kind: src.kind, model: CLOUDFLARE_GEMMA_MODEL }
+      ? { kind: src.kind, model: src.model?.trim() || CLOUDFLARE_GEMMA_MODEL }
       : {
           kind: src.kind,
           model: src.model ?? null,

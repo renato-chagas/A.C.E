@@ -22,26 +22,20 @@ Nas próximas vezes, abra o A.C.E. pelo menu Iniciar ou pelo [launcher opcional]
 
 ## Cloudflare Workers AI
 
-Escolha esta opção para usar o Gemma 4 online. O A.C.E. envia o texto da conversa atual à Cloudflare. Consulte as condições de uso e a cota da sua conta no painel do provedor. [Documentação do Workers AI](https://developers.cloudflare.com/workers-ai/)
+Escolha esta opção para conversar online com um modelo do Workers AI. O A.C.E. envia o texto da conversa atual à Cloudflare. [Documentação do Workers AI](https://developers.cloudflare.com/workers-ai/)
 
-1. No painel da Cloudflare, entre na conta desejada e abra **Workers AI → Use REST API**. Copie o **Account ID**. Crie um token do Workers AI e guarde-o separadamente do ID. [Guia oficial de credenciais](https://developers.cloudflare.com/workers-ai/get-started/rest-api/)
-2. Instale o A.C.E. e feche qualquer instância aberta pelo ícone perto do relógio em **Sair do A.C.E.**. Abra o PowerShell na pasta que contém o [launcher `Iniciar-ACE.cmd`](https://github.com/renato-chagas/A.C.E/releases/latest/download/Iniciar-ACE.cmd).
-3. Execute estas linhas. Quando aparecer a primeira pergunta, cole o ID da conta. Na segunda, cole o token e pressione Enter, mesmo que o texto fique oculto.
+1. No painel da Cloudflare, abra **Workers AI → Use REST API**. Copie o **Account ID** e crie um token em **Create a Workers AI API Token**. [Guia oficial de credenciais](https://developers.cloudflare.com/workers-ai/get-started/rest-api/)
+2. No A.C.E., abra **Configure model → Cloudflare Workers AI**. Preencha **Cloudflare Account ID** e **Workers AI API Token**.
+3. Em **Cloudflare model**, mantenha o Gemma 4 ou escolha outro modelo da lista. Para um modelo fora da lista, use **Enter model ID** e informe o ID completo de um modelo de conversa em texto disponível na sua conta. [Catálogo de modelos da Cloudflare](https://developers.cloudflare.com/workers-ai/models/?tasks=Text+Generation)
+4. Clique em **Connect to Cloudflare** e envie uma mensagem em **Chat**.
 
-   ```powershell
-   $env:CLOUDFLARE_ACCOUNT_ID = (Read-Host 'ID da conta Cloudflare').Trim()
-   $env:CLOUDFLARE_API_TOKEN = [System.Net.NetworkCredential]::new('', (Read-Host 'Token do Workers AI' -AsSecureString)).Password.Trim()
-   & '.\Iniciar-ACE.cmd'
-   Remove-Item Env:CLOUDFLARE_API_TOKEN
-   ```
+O A.C.E. salva as credenciais no Gerenciador de Credenciais do Windows. Para trocar o modelo ou o token, abra **Settings → Inference source** e selecione **Cloudflare Workers AI**. Clique em **Save Cloudflare for next launch**. Depois, saia do A.C.E. pelo ícone perto do relógio e reabra pelo menu Iniciar. Use **Remove saved credentials** para remover as credenciais armazenadas.
 
-4. No A.C.E., abra **Configure model → Cloudflare · Gemma 4 → Connect to Cloudflare**. Teste com uma mensagem curta em **Chat**.
-
-Se já estiver usando outro modelo, selecione Cloudflare em **Settings → Inference source**, clique em **Save Cloudflare for next launch** e reinicie pelo PowerShell conforme os passos acima. O aplicativo lê as credenciais ao abrir. Para usar Cloudflare em outra sessão, execute as linhas de abertura novamente.
+Para iniciar um servidor pelo terminal, veja [Configuração pela linha de comando](../user-guide/ace.md#command-line-setup).
 
 ## Se algo não abrir
 
 - **O chat local está indisponível.** Confira se o Ollama ou o LM Studio está aberto e se o modelo escolhido continua disponível. Use **Retry saved model** quando aparecer.
-- **O A.C.E. pede as variáveis da Cloudflare.** Feche-o pelo ícone perto do relógio e execute de novo o bloco no mesmo PowerShell em que você informou o ID e o token.
+- **O A.C.E. pede as credenciais.** Abra a configuração da Cloudflare no aplicativo e informe o ID da conta e o token. Se o aviso persistir, atualize para a versão mais recente do A.C.E.
 - **A Cloudflare rejeita a chave.** Verifique se o token pertence à conta identificada pelo Account ID e se tem acesso ao Workers AI. [Guia oficial de credenciais](https://developers.cloudflare.com/workers-ai/get-started/rest-api/)
 - **A porta 8000 já está em uso.** Se o servidor existente pertence ao mesmo A.C.E. e ao mesmo perfil, o aplicativo pode reaproveitá-lo. Se a mensagem indicar outro serviço, identifique-o antes de fechar qualquer processo.

@@ -15,6 +15,9 @@ from openjarvis.core.types import Message, Role
 from openjarvis.engine._base import EngineConnectionError, InferenceEngine
 
 CLOUDFLARE_MODEL_ID = "@cf/google/gemma-4-26b-a4b-it"
+_MODEL_ID = re.compile(
+    r"@(?:cf|hf)/[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*"
+)
 _HOST = "https://api.cloudflare.com"
 _TIMEOUT = httpx.Timeout(connect=5.0, read=90.0, write=15.0, pool=5.0)
 _CREDENTIALS = (
@@ -22,6 +25,11 @@ _CREDENTIALS = (
 )
 _NETWORK = "Could not reach Cloudflare Workers AI."
 _RESPONSE = "Cloudflare Workers AI returned no usable text response."
+
+
+def is_cloudflare_model_id(model: str) -> bool:
+    """Validate a Workers AI catalog identifier without a network request."""
+    return len(model) <= 128 and _MODEL_ID.fullmatch(model) is not None
 
 
 class CloudflareInferenceError(EngineConnectionError):
@@ -54,7 +62,7 @@ class CloudflareEngine(InferenceEngine):
         return [CLOUDFLARE_MODEL_ID] if self.health() else []
 
     def can_serve(self, model: str) -> bool:
-        return model == CLOUDFLARE_MODEL_ID and self.health()
+        return is_cloudflare_model_id(model) and self.health()
 
     def _request(
         self,
@@ -64,7 +72,7 @@ class CloudflareEngine(InferenceEngine):
         max_tokens: int,
         options: dict[str, Any],
     ) -> tuple[str, dict[str, Any]]:
-        if model != CLOUDFLARE_MODEL_ID:
+        if not is_cloudflare_model_id(model):
             raise CloudflareInferenceError(
                 400, "Select the supported Cloudflare Workers AI model."
             )
@@ -93,16 +101,22 @@ class CloudflareEngine(InferenceEngine):
             raise CloudflareInferenceError(
                 400, "Invalid Cloudflare Workers AI generation settings."
             )
-        return f"/client/v4/accounts/{self._account_id}/ai/run/{CLOUDFLARE_MODEL_ID}", {
+        base = f"/client/v4/accounts/{self._account_id}/ai"
+        payload: dict[str, Any] = {
             "messages": [
                 {"role": message.role.value, "content": message.text}
                 for message in messages
             ],
             "temperature": temperature,
-            "max_completion_tokens": max_tokens,
             "stream": False,
             "store": False,
         }
+        if model == CLOUDFLARE_MODEL_ID:
+            payload["max_completion_tokens"] = max_tokens
+            return f"{base}/run/{CLOUDFLARE_MODEL_ID}", payload
+
+        payload.update(model=model, max_tokens=max_tokens)
+        return f"{base}/v1/chat/completions", payload
 
     def _client_options(self) -> dict[str, Any]:
         return {
@@ -114,7 +128,7 @@ class CloudflareEngine(InferenceEngine):
         }
 
     @staticmethod
-    def _read_content(response: httpx.Response) -> str:
+    def _read_content(response: httpx.Response, *, workers_envelope: bool) -> str:
         status = response.status_code
         if status in (401, 403):
             raise CloudflareInferenceError(
@@ -126,6 +140,10 @@ class CloudflareEngine(InferenceEngine):
             raise CloudflareInferenceError(
                 429, "Cloudflare Workers AI hit a usage or rate limit."
             )
+        if status in (404, 410):
+            raise CloudflareInferenceError(
+                400, "The selected Cloudflare Workers AI model is unavailable."
+            )
         if not response.is_success:
             raise CloudflareInferenceError(
                 502, "Cloudflare Workers AI could not complete the request."
@@ -135,7 +153,8 @@ class CloudflareEngine(InferenceEngine):
             data = json.loads(response.content.decode("utf-8"))
             if data.get("success", True) is not True:
                 raise ValueError
-            content = data["result"]["choices"][0]["message"]["content"]
+            completion = data["result"] if workers_envelope else data
+            content = completion["choices"][0]["message"]["content"]
         except (
             AttributeError,
             IndexError,
@@ -169,9 +188,11 @@ class CloudflareEngine(InferenceEngine):
         except httpx.HTTPError:
             raise CloudflareInferenceError(502, _NETWORK) from None
         return {
-            "content": self._read_content(response),
+            "content": self._read_content(
+                response, workers_envelope=model == CLOUDFLARE_MODEL_ID
+            ),
             "usage": {},
-            "model": CLOUDFLARE_MODEL_ID,
+            "model": model,
         }
 
     async def stream(
@@ -193,7 +214,14 @@ class CloudflareEngine(InferenceEngine):
             ) from None
         except httpx.HTTPError:
             raise CloudflareInferenceError(502, _NETWORK) from None
-        yield self._read_content(response)
+        yield self._read_content(
+            response, workers_envelope=model == CLOUDFLARE_MODEL_ID
+        )
 
 
-__all__ = ["CLOUDFLARE_MODEL_ID", "CloudflareEngine", "CloudflareInferenceError"]
+__all__ = [
+    "CLOUDFLARE_MODEL_ID",
+    "CloudflareEngine",
+    "CloudflareInferenceError",
+    "is_cloudflare_model_id",
+]

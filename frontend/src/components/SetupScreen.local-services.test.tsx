@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { stageInferenceSource, type SetupStatus } from '../lib/api';
+import { getCloudflareCredentialsStatus, removeCloudflareCredentials, saveCloudflareCredentials, stageInferenceSource, type SetupStatus } from '../lib/api';
 import { checkPackagedBackendHealth, desktopReadyMode, initDesktopDistribution, isOfflineDistribution } from '../lib/desktop-startup';
 import { CustomEndpointSetup, InferenceSourceChooser, OllamaConsent } from './InferenceSourceSetup';
 
@@ -130,7 +130,7 @@ describe('desktop without a model', () => {
       <InferenceSourceChooser onChoose={vi.fn()} onCancel={vi.fn()} />,
     );
     expect(chooser).toContain('Continue with local services');
-    expect(chooser).toContain('Cloudflare · Gemma 4');
+    expect(chooser).toContain('Cloudflare Workers AI');
     expect(chooser).toContain('already installed or imported');
     const modelForm = renderToStaticMarkup(<OllamaConsent onBack={vi.fn()} onConfirm={vi.fn()} />);
     expect(modelForm).toContain('exact tag of a model already installed or imported');
@@ -151,6 +151,39 @@ describe('desktop without a model', () => {
       model: '@cf/google/gemma-4-26b-a4b-it',
       pending: true,
     });
+  });
+
+  it('stages an explicitly selected Cloudflare model without credentials', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    await stageInferenceSource({ kind: 'cloudflare', model: ' @cf/openai/gpt-oss-20b ' });
+    expect(native.invoke).toHaveBeenCalledWith('set_inference_source', {
+      kind: 'cloudflare',
+      model: '@cf/openai/gpt-oss-20b',
+      pending: true,
+    });
+  });
+
+  it('writes and removes Cloudflare credentials through dedicated native calls only', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const credentials = { accountId: '0'.repeat(32), apiToken: 'test-token' };
+    native.invoke.mockResolvedValueOnce('stored');
+    await expect(getCloudflareCredentialsStatus()).resolves.toBe('stored');
+    await saveCloudflareCredentials(credentials.accountId, credentials.apiToken);
+    await removeCloudflareCredentials();
+
+    expect(native.invoke.mock.calls).toEqual([
+      ['get_cloudflare_credentials_status'],
+      ['save_cloudflare_credentials', credentials],
+      ['remove_cloudflare_credentials'],
+    ]);
+  });
+
+  it('does not display the contents of a native credential write failure', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    native.invoke.mockRejectedValueOnce('test-token');
+    await expect(saveCloudflareCredentials('0'.repeat(32), 'test-token')).rejects.toThrow(
+      /^Could not save Cloudflare credentials in your system credential store\.$/,
+    );
   });
 
   it('preserves standard desktop behavior when a legacy launcher lacks the command', async () => {

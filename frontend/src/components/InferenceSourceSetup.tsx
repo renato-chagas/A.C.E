@@ -1,7 +1,6 @@
 import { useEffect, useReducer, useState, type FormEvent, type ReactNode } from 'react';
 import { ArrowLeft, Cloud, Cpu, Download, Loader2, Server, ShieldCheck } from 'lucide-react';
 import {
-  CLOUDFLARE_GEMMA_MODEL,
   fetchOllamaModels,
   isTauri,
   resetInferenceSource,
@@ -10,6 +9,7 @@ import {
   type InferenceSource,
 } from '../lib/api';
 import { isOfflineDistribution } from '../lib/desktop-startup';
+import { CloudflareSetupForm } from './CloudflareSetupForm';
 
 export type InferenceSetupStep = 'choose' | InferenceSource['kind'];
 export type InferenceSetupAction = `choose_${InferenceSource['kind']}` | 'back';
@@ -143,7 +143,7 @@ export function InferenceSourceChooser({
           <Cloud size={22} className="shrink-0 mt-0.5" style={{ color: 'var(--color-accent)' }} />
           <span>
             <span className="block text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
-              Cloudflare · Gemma 4
+              Cloudflare Workers AI
             </span>
             <span className="block text-xs mt-1" style={{ color: 'var(--color-text-secondary)' }}>
               Online chat through your Cloudflare Workers AI account.
@@ -524,112 +524,15 @@ export function CustomEndpointSetup({
   );
 }
 
-export function cloudflarePowerShellCommand(executable = ''): string {
-  const launchPath = executable
-    ? `'${executable.replace(/'/g, "''")}'`
-    : "(Read-Host 'Full path to openjarvis-desktop.exe')";
-  return [
-    '& {',
-    '  if (Get-Process -Name openjarvis-desktop -ErrorAction SilentlyContinue) {',
-    "    Write-Error 'Exit A.C.E. from the Windows tray before setup.'",
-    '    return',
-    '  }',
-    "  $env:CLOUDFLARE_ACCOUNT_ID = (Read-Host 'Cloudflare Account ID').Trim()",
-    "  $aceToken = Read-Host 'Workers AI API token' -AsSecureString",
-    "  $env:CLOUDFLARE_API_TOKEN = [System.Net.NetworkCredential]::new('', $aceToken).Password.Trim()",
-    `  Start-Process -FilePath ${launchPath}`,
-    '}',
-  ].join('\n');
-}
-
-export function CloudflareSetupGuide({ inSettings = false }: { inSettings?: boolean }) {
-  const windows = isOfflineDistribution() || typeof window === 'undefined' || /Windows/.test(navigator.userAgent);
-  const [executable, setExecutable] = useState('');
-  const [clipboardMessage, setClipboardMessage] = useState('');
-
-  useEffect(() => {
-    if (!windows || !isTauri()) return;
-    let active = true;
-    import('@tauri-apps/api/path')
-      .then(({ resolveResource }) => resolveResource('openjarvis-desktop.exe'))
-      .then((path) => { if (active) setExecutable(path); })
-      .catch(() => { /* The command can prompt for the path. */ });
-    return () => { active = false; };
-  }, [windows]);
-
-  const commands = cloudflarePowerShellCommand(executable);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(commands);
-      setClipboardMessage('Copied');
-    } catch {
-      setClipboardMessage('Select and copy the commands below.');
-    }
-  };
-
-  return (
-    <div className="space-y-3 text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-      <p>Online chat sends messages and conversation history to Cloudflare Workers AI.</p>
-      <SetupSteps>
-        <li>
-          In the <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener noreferrer" className="underline">Cloudflare dashboard</a>, open <strong>Workers AI</strong> and select <strong>Use REST API</strong>. Copy the <strong>Account ID</strong> and create a <strong>Workers AI API token</strong>.
-        </li>
-        <li>
-          {inSettings && <>Click <strong>Save Cloudflare for next launch</strong>. </>}
-          {windows ? <>Copy the PowerShell setup below, then exit the app using <strong>Sair do A.C.E.</strong> in the Windows tray.</> : 'Quit A.C.E. before starting it with your Cloudflare credentials.'}
-        </li>
-        <li>
-          {windows ? (
-            <>
-              Paste the entire block into PowerShell and press Enter. Enter your Account ID at the first prompt and your token at the second. PowerShell masks the token.
-              {!executable && <> If asked for the app path, paste the full path to <code>openjarvis-desktop.exe</code> without quotes.</>}
-            </>
-          ) : (
-            <>Set <code>CLOUDFLARE_ACCOUNT_ID</code> and <code>CLOUDFLARE_API_TOKEN</code> in the terminal environment that starts A.C.E., then launch the app from that terminal.</>
-          )}
-        </li>
-        {!inSettings && <li>After the app reopens, choose <strong>Cloudflare · Gemma 4</strong> and click <strong>Connect to Cloudflare</strong>.</li>}
-      </SetupSteps>
-      {windows && (
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={() => void copy()} className="rounded-lg border px-3 py-1.5 text-xs font-medium" style={{ borderColor: 'var(--color-border)' }}>
-              Copy PowerShell setup
-            </button>
-            {clipboardMessage && <span role="status" className="text-xs">{clipboardMessage}</span>}
-          </div>
-          <pre className="select-text whitespace-pre-wrap break-all rounded-lg p-3 text-xs" style={{ background: 'var(--color-surface)' }}><code>{commands}</code></pre>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function CloudflareConsent({ onBack, onConfirm, busy = false, error = '' }: {
+export function CloudflareConsent({ onBack, onConfirm }: {
   onBack: () => void;
-  onConfirm: () => void;
-  busy?: boolean;
-  error?: string;
+  onConfirm: (model: string) => Promise<void>;
 }) {
   return (
     <SetupFrame>
-      <BackButton onClick={onBack} disabled={busy} />
       <div className="space-y-4">
-        <h2 className="font-semibold" style={{ color: 'var(--color-text)' }}>Use Gemma 4 online</h2>
-        <p className="break-all text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-          <code>{CLOUDFLARE_GEMMA_MODEL}</code>
-        </p>
-        <CloudflareSetupGuide />
-        {error && <SetupError message={error} />}
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onConfirm}
-          className="w-full py-3 px-4 rounded-xl font-semibold text-sm cursor-pointer disabled:opacity-50"
-          style={{ background: 'var(--color-accent)', color: 'white' }}
-        >
-          {busy ? 'Connecting to Cloudflare…' : 'Connect to Cloudflare'}
-        </button>
+        <h2 className="font-semibold" style={{ color: 'var(--color-text)' }}>Configure Cloudflare Workers AI</h2>
+        <CloudflareSetupForm onBack={onBack} onConfirm={onConfirm} />
       </div>
     </SetupFrame>
   );
@@ -686,10 +589,11 @@ export function InferenceSourceSetup({
   if (step === 'cloudflare') {
     return (
       <CloudflareConsent
-        busy={busy}
-        error={error}
         onBack={goBack}
-        onConfirm={() => void begin({ kind: 'cloudflare', model: CLOUDFLARE_GEMMA_MODEL })}
+        onConfirm={async (model) => {
+          await persistAndStartInferenceSource({ kind: 'cloudflare', model });
+          onStarted();
+        }}
       />
     );
   }

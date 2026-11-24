@@ -46,12 +46,20 @@ For example, a running LM Studio server can serve `qwen/qwen3.5-9b` at
 
 ### Optional Cloudflare Workers AI chat
 
-Choose **Cloudflare · Gemma 4** to use `@cf/google/gemma-4-26b-a4b-it` online. The backend sends the current text conversation to Cloudflare. Automatic local memory retrieval and local tools are available in the local chat modes. [Windows setup for Cloudflare](../getting-started/ace-windows.md#cloudflare-workers-ai)
+Choose **Cloudflare Workers AI** to use a text chat model online. The default model is Gemma 4 (`@cf/google/gemma-4-26b-a4b-it`). The backend sends the current text conversation to Cloudflare. Automatic local memory retrieval and local tools are available in the local chat modes.
 
-To select the same provider for the loopback API, run
-`jarvis serve --engine cloudflare` with those variables set. You can also set
-`provider = "cloudflare"` under `[intelligence]` for `jarvis serve`.
-The standard chat endpoint uses the model ID above.
+On Windows, enter the account ID and API token in the desktop setup screen and select a model. The A.C.E. stores the credentials in Windows Credential Manager. Open **Settings → Inference source** to change the model or manage the saved credentials. [Windows setup for Cloudflare](../getting-started/ace-windows.md#cloudflare-workers-ai)
+
+#### Command-line setup
+
+To configure the loopback API from a terminal, set `CLOUDFLARE_ACCOUNT_ID`
+and `CLOUDFLARE_API_TOKEN` in the environment that launches the server, then
+run `jarvis serve --engine cloudflare` to use Gemma 4. Choose another
+model available on your account by passing its exact ID, for example
+`jarvis serve --engine cloudflare --model '@cf/qwen/qwen3.8-27b'`. You can
+also set `provider = "cloudflare"` under `[intelligence]` for `jarvis serve`.
+
+### Local model and embedding downloads
 
 For CLI setup, the model download remains optional. If the user skips it, ACE
 saves the selected model and prints a command to download it later.

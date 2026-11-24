@@ -56,13 +56,19 @@ def create_local_services_app(
     *,
     api_key: str = "",
     cloudflare_engine: InferenceEngine | None = None,
+    cloudflare_model: str | None = None,
 ) -> FastAPI:
     """Expose local services, with text chat only when Cloudflare is selected."""
     model = ""
     if cloudflare_engine is not None:
-        from openjarvis.engine.cloudflare import CLOUDFLARE_MODEL_ID
+        from openjarvis.engine.cloudflare import (
+            CLOUDFLARE_MODEL_ID,
+            is_cloudflare_model_id,
+        )
 
-        model = CLOUDFLARE_MODEL_ID
+        model = CLOUDFLARE_MODEL_ID if cloudflare_model is None else cloudflare_model
+        if not is_cloudflare_model_id(model):
+            raise ValueError("Invalid Cloudflare Workers AI model ID.")
         config = deepcopy(config)
         config.intelligence.provider = "cloudflare"
         config.agent.context_from_memory = False
@@ -198,7 +204,7 @@ def _mount_cloudflare_chat(app: FastAPI, model: str) -> None:
     @app.post("/v1/chat/completions")
     async def cloudflare_chat(body: ChatCompletionRequest, request: Request):
         if body.model != model:
-            raise HTTPException(400, "Selecione o Gemma 4 do Cloudflare no ACE.")
+            raise HTTPException(400, "Use o modelo Cloudflare selecionado no A.C.E.")
         if body.tools:
             raise HTTPException(
                 400, "O modo Cloudflare do ACE oferece conversa em texto."

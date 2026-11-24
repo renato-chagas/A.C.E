@@ -42,14 +42,17 @@ def packaged_chat(monkeypatch, tmp_path):
     sync_client = httpx.Client
     async_client = httpx.AsyncClient
     received = []
-    upstream = {"status": 200}
+    upstream = {"status": 200, "model": CLOUDFLARE_MODEL_ID}
 
     def respond(request):
         received.append(request)
         assert request.url.host == "api.cloudflare.com"
-        assert request.url.path == (
-            f"/client/v4/accounts/{_ACCOUNT}/ai/run/{CLOUDFLARE_MODEL_ID}"
-        )
+        base = f"/client/v4/accounts/{_ACCOUNT}/ai"
+        if upstream["model"] == CLOUDFLARE_MODEL_ID:
+            assert request.url.path == f"{base}/run/{CLOUDFLARE_MODEL_ID}"
+        else:
+            assert request.url.path == f"{base}/v1/chat/completions"
+            assert json.loads(request.content)["model"] == upstream["model"]
         assert request.headers["Authorization"] == f"Bearer {_TOKEN}"
         if upstream["status"] != 200:
             body = {"success": False, "errors": [{"message": _TOKEN}]}
@@ -67,6 +70,8 @@ def packaged_chat(monkeypatch, tmp_path):
                     ]
                 },
             }
+        if upstream["status"] == 200 and upstream["model"] != CLOUDFLARE_MODEL_ID:
+            body = body["result"]
         return httpx.Response(
             upstream["status"],
             headers={"Content-Type": "application/json"},
@@ -203,6 +208,29 @@ def test_upstream_failures_are_safe_in_nonstream_and_ui_stream(
         assert _TOKEN not in stream.text
         assert _TOKEN not in response.text
     assert _TOKEN not in caplog.text
+
+
+def test_explicit_model_is_advertised_and_used_by_packaged_chat(packaged_chat):
+    _, received, upstream, started = packaged_chat
+    selected = "@cf/qwen/qwen3.8-27b"
+    upstream["model"] = selected
+    outcome = CliRunner().invoke(
+        serve_module.serve, ["--engine", "cloudflare", "--model", selected]
+    )
+    assert outcome.exit_code == 0, outcome.output
+    app, _ = started[0]
+    body = {"model": selected, "messages": [{"role": "user", "content": "Olá"}]}
+    with TestClient(
+        app, base_url="http://127.0.0.1", client=("127.0.0.1", 51264)
+    ) as client:
+        assert client.get("/v1/info").json()["model"] == selected
+        assert client.get("/v1/models").json()["data"][0]["id"] == selected
+        wrong_model = client.post(_CHAT, json={**body, "model": CLOUDFLARE_MODEL_ID})
+        assert wrong_model.status_code == 400
+        assert not received
+        reply = client.post(_CHAT, json=body)
+        assert reply.status_code == 200, reply.text
+        assert reply.json()["choices"][0]["message"]["content"] == _REPLY
 
 
 def test_local_services_do_not_load_cloudflare_even_with_env(packaged_chat):

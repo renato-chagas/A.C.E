@@ -201,7 +201,7 @@ export function ChatArea({
             <p className="text-sm text-center max-w-sm mb-6" style={{ color: 'var(--color-text-secondary)' }}>
               {localServicesOnly
                 ? 'You can read saved conversations and use local data.'
-                : cloudflareOnline ? 'Ask Gemma 4 online.' : 'Ask anything. Your AI runs locally.'}
+                : cloudflareOnline ? 'Ask your Cloudflare model online.' : 'Ask anything. Your AI runs locally.'}
             </p>
 
             {/* Quick action hints */}

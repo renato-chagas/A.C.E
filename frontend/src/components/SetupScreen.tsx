@@ -110,7 +110,10 @@ export function SetupScreen({
     ]);
     let startupInfo = info;
     if (s?.source === 'cloudflare') {
-      startupInfo = { model: CLOUDFLARE_GEMMA_MODEL, engine: 'cloudflare', agent: info?.agent ?? null };
+      const liveModel = info?.engine === 'cloudflare' ? info.model?.trim() : '';
+      const configured = liveModel ? null : await getInferenceSource().catch(() => null);
+      const configuredModel = configured?.kind === 'cloudflare' ? configured.model?.trim() : '';
+      startupInfo = { model: liveModel || configuredModel || CLOUDFLARE_GEMMA_MODEL, engine: 'cloudflare', agent: info?.agent ?? null };
     } else if (!info?.model?.trim()) {
       const configured = await getInferenceSource().catch(() => null);
       if (configured?.model?.trim()) {
@@ -218,7 +221,7 @@ export function SetupScreen({
           {(connectingCloudflare
             ? [
                 { key: 'ollama_ready' as const, label: 'Cloudflare Workers AI', icon: Cloud, detail: 'Connecting to Cloudflare…' },
-                { key: 'model_ready' as const, label: 'Gemma 4', icon: Database, detail: 'Checking online inference…' },
+                { key: 'model_ready' as const, label: 'Online model', icon: Database, detail: 'Checking online inference…' },
                 { key: 'server_ready' as const, label: 'API Server', icon: Server, detail: 'Starting server...' },
               ]
             : status?.source === 'custom'

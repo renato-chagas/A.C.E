@@ -6,6 +6,7 @@ use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
 use tokio::sync::Mutex;
 
+mod cloudflare_credentials;
 mod offline;
 #[cfg(target_os = "windows")]
 mod windows_tcp;
@@ -44,7 +45,7 @@ fn capture_cloudflare_launch_environment() -> &'static Result<CloudflareEnvironm
     })
 }
 
-fn cloudflare_environment() -> Result<CloudflareEnvironment, String> {
+fn cloudflare_launch_environment() -> Result<CloudflareEnvironment, String> {
     #[cfg(target_os = "windows")]
     return capture_cloudflare_launch_environment().clone();
     #[cfg(not(target_os = "windows"))]
@@ -60,7 +61,7 @@ fn read_cloudflare_launch_environment() -> Result<CloudflareEnvironment, String>
     });
     match (account, token) {
         (Some(account), Some(token)) => Ok([account, token]),
-        _ => Err("Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in the ACE launch environment to use Cloudflare.".into()),
+        _ => Err("Cloudflare credentials were not provided in the A.C.E. launch environment.".into()),
     }
 }
 
@@ -136,12 +137,17 @@ fn boot_plan(cfg: &InferenceConfig) -> Result<BootPlan, String> {
             })
         }
         SourceKind::Cloudflare => {
-            validate_cloudflare_source(cfg.model.as_deref(), cfg.host.is_some(), cfg.engine.is_some(), false)?;
+            let model = validate_cloudflare_source(
+                cfg.model.as_deref(),
+                cfg.host.is_some(),
+                cfg.engine.is_some(),
+                false,
+            )?;
             Ok(BootPlan {
                 launch_ollama: false,
                 model_to_pull: None,
                 engine_host: None,
-                serve_args: ["--engine", "cloudflare", "--model", CLOUDFLARE_MODEL, "--agent", "simple"]
+                serve_args: ["--engine", "cloudflare", "--model", model, "--agent", "simple"]
                     .into_iter().map(str::to_owned).collect(),
             })
         }
@@ -1265,13 +1271,13 @@ async fn start_bundled_server(
             Err("The local memory and knowledge services are unavailable.".into())
         }
         JarvisStartResult::ServiceUnavailable(_) if cloudflare => {
-            Err("Cloudflare inference is unavailable. Check the launch environment and connection.".into())
+            Err("Cloudflare inference is unavailable. Check your Cloudflare credentials and connection.".into())
         }
         JarvisStartResult::ServiceUnavailable(_) => {
             Err("The selected local inference model is unavailable.".into())
         }
         JarvisStartResult::EarlyExit { .. } if cloudflare => {
-            Err("Cloudflare could not start. Check the launch environment and connection.".into())
+            Err("Cloudflare could not start. Check your Cloudflare credentials and connection.".into())
         }
         JarvisStartResult::EarlyExit { code, .. } => {
             Err(format!("The packaged ACE backend exited before becoming ready (code {code:?})."))
@@ -1317,7 +1323,7 @@ async fn boot_configured_backend(
     }
 
     let cloudflare_credentials = if use_cloudflare {
-        match cloudflare_environment() {
+        match cloudflare_credentials::environment().await {
             Ok(credentials) => Some(credentials),
             Err(error) => {
                 status.lock().await.error = Some(error);
@@ -1914,7 +1920,7 @@ async fn boot_configured_backend(
         JarvisStartResult::Ready => {}
         _ if use_cloudflare => {
             status.lock().await.error = Some(
-                "Cloudflare inference is unavailable. Check the launch environment and connection.".into(),
+                "Cloudflare inference is unavailable. Check your Cloudflare credentials and connection.".into(),
             );
             return;
         }
@@ -2299,6 +2305,7 @@ async fn check_packaged_start_health(
 
 fn may_attach_bundled_mode(
     mode: offline::AttachedBackendMode,
+    cloudflare_model: Option<&str>,
     config: Option<&InferenceConfig>,
     try_inference: bool,
 ) -> bool {
@@ -2309,7 +2316,13 @@ fn may_attach_bundled_mode(
         Inference => try_inference && !config.is_some_and(|cfg| cfg.kind == SourceKind::Cloudflare),
         Cloudflare => try_inference
             && config.is_some_and(|cfg| {
-                cfg.kind == SourceKind::Cloudflare && cfg.confirmed && offline_source_allowed(cfg)
+                cfg.kind == SourceKind::Cloudflare && cfg.confirmed
+                    && validate_cloudflare_source(
+                        cfg.model.as_deref(),
+                        cfg.host.is_some(),
+                        cfg.engine.is_some(),
+                        false,
+                    ).is_ok_and(|model| Some(model) == cloudflare_model)
             }),
     }
 }
@@ -2335,7 +2348,9 @@ async fn try_attach_bundled_server(
         return false;
     };
     let config = read_configured_inference_config();
-    let next_status = if may_attach_bundled_mode(identity.mode, config.as_ref(), try_inference) {
+    let next_status = if may_attach_bundled_mode(
+        identity.mode, identity.cloudflare_model.as_deref(), config.as_ref(), try_inference,
+    ) {
         match probe_verified_bundled_server(runtime, port, &identity).await {
             Some(PackagedHealthProbe::Compatible(health)) => attached_setup_status(health),
             Some(PackagedHealthProbe::Incompatible) => attached_recovery_status(
@@ -2347,7 +2362,7 @@ async fn try_attach_bundled_server(
         // Keep the identified process available for explicit recovery without
         // probing a cloud inference backend from a local startup path.
         attached_recovery_status(
-            "The running ACE backend uses a different inference source. Choose Return to local services to restart it, then choose the source to use.",
+            "The running ACE backend uses a different inference source or model. Choose Return to local services to restart it, then choose the source to use.",
         )
     };
     backend.lock().await.attached = Some(identity);
@@ -2417,7 +2432,12 @@ async fn check_packaged_backend_health(
         (manager.bundled_root.clone(), manager.attached.clone())
     };
     if let (Some(root), Some(expected)) = (root, attached) {
-        if !may_attach_bundled_mode(expected.mode, read_configured_inference_config().as_ref(), true) {
+        if !may_attach_bundled_mode(
+            expected.mode,
+            expected.cloudflare_model.as_deref(),
+            read_configured_inference_config().as_ref(),
+            true,
+        ) {
             return Ok(Unreachable);
         }
         if let Ok(runtime) = offline::BundledBackend::open(&root) {
@@ -3144,8 +3164,12 @@ async fn set_inference_source(
     }
     let model = match kind {
         SourceKind::Cloudflare => {
-            validate_cloudflare_source(model.as_deref(), host.is_some(), engine.is_some(), api_key.is_some())?;
-            Some(CLOUDFLARE_MODEL.into())
+            Some(validate_cloudflare_source(
+                model.as_deref(),
+                host.is_some(),
+                engine.is_some(),
+                api_key.is_some(),
+            )?.into())
         }
         SourceKind::Ollama => Some(normalize_ollama_model_tag(model.as_deref().unwrap_or(""))?),
         SourceKind::Custom => model
@@ -3174,7 +3198,7 @@ async fn set_inference_source(
     if is_offline_distribution() {
         if !offline_source_allowed(&cfg) || api_key.is_some() {
             return Err(
-                "Choose a supported local engine or the Cloudflare Workers AI option. Cloudflare credentials are read from the launch environment.".into(),
+                "Choose a supported local engine or the Cloudflare Workers AI option.".into(),
             );
         }
         return write_inference_config_at(&cfg, &inference_config_path());
@@ -3255,14 +3279,25 @@ fn validate_cloudflare_source(
     has_host: bool,
     has_engine: bool,
     has_api_key: bool,
-) -> Result<(), String> {
+) -> Result<&str, String> {
     if has_host || has_engine || has_api_key {
-        return Err("Cloudflare uses a fixed endpoint and credentials from the ACE launch environment.".into());
+        return Err("Cloudflare Workers AI uses its own endpoint and credential settings.".into());
     }
-    if model.is_some_and(|value| value != CLOUDFLARE_MODEL) {
-        return Err("Cloudflare Workers AI uses the Gemma 4 26B A4B model in ACE.".into());
+    let model = model.map_or(CLOUDFLARE_MODEL, str::trim);
+    let valid_segment = |part: &str| {
+        part.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+            && part.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    };
+    let mut parts = model.split('/');
+    if model.len() <= 128
+        && matches!(parts.next(), Some("@cf" | "@hf"))
+        && parts.next().is_some_and(valid_segment)
+        && parts.next().is_some_and(valid_segment)
+        && parts.next().is_none()
+    {
+        return Ok(model);
     }
-    Ok(())
+    Err("Enter a Cloudflare model ID in the form @cf/vendor/model or @hf/vendor/model.".into())
 }
 
 impl Default for SourceKind {
@@ -4230,6 +4265,9 @@ pub fn run() {
             delete_ollama_model,
             save_cloud_key,
             get_cloud_key_status,
+            cloudflare_credentials::get_cloudflare_credentials_status,
+            cloudflare_credentials::save_cloudflare_credentials,
+            cloudflare_credentials::remove_cloudflare_credentials,
             get_inference_source,
             set_inference_source,
             toggle_overlay,
@@ -4304,7 +4342,7 @@ mod tests {
     }
 
     #[test]
-    fn cloudflare_source_is_explicit_and_uses_only_the_pinned_model() {
+    fn cloudflare_source_is_explicit_and_validates_model_ids() {
         use super::CLOUDFLARE_MODEL;
 
         let cfg = parse_configured_inference_config(r#"{"kind":"cloudflare"}"#).unwrap();
@@ -4323,6 +4361,20 @@ mod tests {
             assert!(super::validate_cloudflare_source(Some(CLOUDFLARE_MODEL), host, engine, api_key).is_err());
         }
         assert!(super::validate_cloudflare_source(Some(""), false, false, false).is_err());
+        for id in ["@cf/meta/example-8b", "@hf/vendor/model.v2"] {
+            let cfg = InferenceConfig { model: Some(format!("  {id}  ")), ..cfg.clone() };
+            assert_eq!(boot_plan(&cfg).unwrap().serve_args[3], id);
+        }
+        for invalid in [
+            "", ".", "@cf/meta/", "@cf/meta/../model", "@cf/meta/.hidden", "@hf/-vendor/model",
+            "@cf/vendor/model/path", "@cf/vendor/model?option=true", "@other/vendor/model",
+            "@cf/vendor/módelo", "https://example.org/model",
+        ] {
+            let cfg = InferenceConfig { model: Some(invalid.into()), ..cfg.clone() };
+            assert!(boot_plan(&cfg).is_err(), "accepted {invalid}");
+        }
+        let too_long = format!("@cf/vendor/{}", "a".repeat(120));
+        assert!(super::validate_cloudflare_source(Some(&too_long), false, false, false).is_err());
         assert!(parse_configured_inference_config(r#"{"kind":"cloudflare","model":"different"}"#).is_none());
         assert!(parse_configured_inference_config(r#"{"kind":"cloudflare","host":"http://127.0.0.1"}"#).is_none());
         assert!(boot_plan(&InferenceConfig {
@@ -4420,14 +4472,17 @@ mod tests {
             ..InferenceConfig::default()
         };
         let pending = InferenceConfig { confirmed: false, ..cloud.clone() };
-        assert!(may_attach_bundled_mode(Cloudflare, Some(&cloud), true));
-        assert!(!may_attach_bundled_mode(Cloudflare, Some(&pending), true));
-        assert!(!may_attach_bundled_mode(Cloudflare, Some(&cloud), false));
-        assert!(!may_attach_bundled_mode(Cloudflare, Some(&local), true));
-        assert!(!may_attach_bundled_mode(Cloudflare, None, true));
-        assert!(!may_attach_bundled_mode(Inference, Some(&cloud), true));
-        assert!(may_attach_bundled_mode(Inference, Some(&local), true));
-        assert!(may_attach_bundled_mode(LocalServices, Some(&cloud), true));
+        let gemma = Some(super::CLOUDFLARE_MODEL);
+        assert!(may_attach_bundled_mode(Cloudflare, gemma, Some(&cloud), true));
+        assert!(!may_attach_bundled_mode(Cloudflare, Some("@cf/vendor/alternative"), Some(&cloud), true));
+        assert!(!may_attach_bundled_mode(Cloudflare, None, Some(&cloud), true));
+        assert!(!may_attach_bundled_mode(Cloudflare, gemma, Some(&pending), true));
+        assert!(!may_attach_bundled_mode(Cloudflare, gemma, Some(&cloud), false));
+        assert!(!may_attach_bundled_mode(Cloudflare, gemma, Some(&local), true));
+        assert!(!may_attach_bundled_mode(Cloudflare, gemma, None, true));
+        assert!(!may_attach_bundled_mode(Inference, None, Some(&cloud), true));
+        assert!(may_attach_bundled_mode(Inference, None, Some(&local), true));
+        assert!(may_attach_bundled_mode(LocalServices, None, Some(&cloud), false));
     }
 
     #[cfg(feature = "windows-offline")]
@@ -4492,8 +4547,17 @@ mod tests {
         let identity = backend.lock().await.attached.clone().unwrap();
         assert_eq!(identity.pid, pid);
         assert_eq!(identity.mode, AttachedBackendMode::Cloudflare);
+        assert_eq!(identity.cloudflare_model.as_deref(), Some(CLOUDFLARE_MODEL));
         backend.lock().await.stop_children().await;
         assert!(child.try_wait().unwrap().is_none(), "Unselected cloud worker was stopped.");
+
+        let different_cloud = InferenceConfig {
+            model: Some("@cf/vendor/different-model".into()),
+            ..cloud.clone()
+        };
+        super::write_inference_config_at(&different_cloud, &home.join("inference-offline.json")).unwrap();
+        assert!(super::try_attach_bundled_server(&bundled, port, &backend, &status, true).await);
+        assert!(!status.lock().await.server_ready);
 
         super::write_inference_config_at(&cloud, &home.join("inference-offline.json")).unwrap();
         assert!(super::try_attach_bundled_server(&bundled, port, &backend, &status, true).await);

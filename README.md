@@ -16,7 +16,7 @@ Para atualizar, saia do A.C.E. pelo ícone perto do relógio, execute o novo ins
 | --- | --- |
 | **Local Ollama** | Para usar um modelo já baixado no Ollama. [Configurar Ollama](docs/getting-started/ace-windows.md#ollama) |
 | **OpenAI-compatible server** | Para usar LM Studio ou outro servidor compatível no mesmo computador. [Configurar servidor local](docs/getting-started/ace-windows.md#lm-studio-ou-outro-servidor-local) |
-| **Cloudflare · Gemma 4** | Para conversar online com uma conta do Workers AI. O texto da conversa é enviado à Cloudflare. [Configurar Cloudflare](docs/getting-started/ace-windows.md#cloudflare-workers-ai) |
+| **Cloudflare Workers AI** | Informe o ID da conta e o token no aplicativo e escolha o modelo. O texto da conversa é enviado à Cloudflare. [Configurar Cloudflare](docs/getting-started/ace-windows.md#cloudflare-workers-ai) |
 
 Conteúdo novo na web requer internet. Para consultar o que já foi salvo, abra **Web Research → Search saved sources**. Você também pode corrigir registros em **Memory Facts** e consultar as relações em **Knowledge Graph**. [Guia de recursos do A.C.E.](docs/user-guide/ace.md)
 

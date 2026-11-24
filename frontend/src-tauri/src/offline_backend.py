@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 
 import psutil
@@ -11,14 +12,7 @@ _MODES = {
     "--local-services-only": "local_services",
     "--local-inference-only": "inference",
 }
-_CLOUDFLARE_ARGS = (
-    "--engine",
-    "cloudflare",
-    "--model",
-    "@cf/google/gemma-4-26b-a4b-it",
-    "--agent",
-    "simple",
-)
+_CLOUDFLARE_MODEL = re.compile(r"@(?:cf|hf)/[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def _canonical(path):
@@ -61,8 +55,18 @@ def _verified_server(port):
     if len(args) < len(expected) + 2 or tuple(args[1 : 1 + len(expected)]) != expected:
         return None
     managed_args = tuple(args[1 + len(expected) :])
-    if managed_args == _CLOUDFLARE_ARGS:
+    cloudflare_model = None
+    if managed_args[:2] == ("--engine", "cloudflare"):
+        if (
+            len(managed_args) != 6
+            or managed_args[2] != "--model"
+            or managed_args[4:] != ("--agent", "simple")
+            or len(managed_args[3]) > 128
+            or not _CLOUDFLARE_MODEL.fullmatch(managed_args[3])
+        ):
+            return None
         mode = "cloudflare"
+        cloudflare_model = managed_args[3]
     else:
         mode = _MODES.get(args[-1])
         if mode is None:
@@ -82,7 +86,10 @@ def _verified_server(port):
         return None
     if not process.is_running():
         return None
-    return process, {"pid": process.pid, "started_at": started_at, "mode": mode}
+    identity = {"pid": process.pid, "started_at": started_at, "mode": mode}
+    if cloudflare_model is not None:
+        identity["cloudflare_model"] = cloudflare_model
+    return process, identity
 
 
 def main():
