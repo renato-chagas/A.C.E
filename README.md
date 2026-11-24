@@ -4,11 +4,9 @@ O A.C.E. é um assistente para Windows com conversas, memória e pesquisa. Você
 
 ## [Baixar o instalador do A.C.E. para Windows (.exe)](https://github.com/renato-chagas/A.C.E/releases/latest/download/Instalar-A.C.E.exe)
 
-Abra `Instalar-A.C.E.exe` no Windows de 64 bits. Esse arquivo instala o aplicativo, o serviço local em Python e o WebView2.
+Abra `Instalar-A.C.E.exe` no Windows de 64 bits e clique em **Instalar**. O arquivo inclui o aplicativo, o serviço local em Python e o WebView2. Mantenha a opção de abrir o A.C.E. marcada ao concluir.
 
 Na primeira abertura, escolha **Configure model** para ativar um modelo de conversa ou **Continue with local services** para usar a memória e consultar as fontes salvas.
-
-O [launcher opcional](https://github.com/renato-chagas/A.C.E/releases/latest/download/Iniciar-ACE.cmd) abre o A.C.E. instalado. Quando estiver na mesma pasta do instalador, também pode iniciar a instalação.
 
 Para atualizar, saia do A.C.E. pelo ícone perto do relógio, execute o novo instalador e mantenha a pasta da instalação existente. [Guia de instalação e atualização](docs/getting-started/ace-windows.md)
 

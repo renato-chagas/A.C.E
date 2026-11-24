@@ -1,3 +1,16 @@
+# Instalar o A.C.E. no Windows
+
+## [Baixar o instalador para Windows 64 bits (.exe)](https://github.com/renato-chagas/A.C.E/releases/latest/download/Instalar-A.C.E.exe)
+
+Abra `Instalar-A.C.E.exe` e clique em **Instalar**. O arquivo inclui o A.C.E., o serviço local em Python e o WebView2. Ao concluir, mantenha a opção de abrir o aplicativo marcada.
+
+[Escolher um modelo e configurar o A.C.E.](../../docs/getting-started/ace-windows.md) · [Ver outras versões no GitHub](https://github.com/renato-chagas/A.C.E/releases)
+
+<details>
+<summary>Scripts de desenvolvimento do OpenJarvis</summary>
+
+As instruções abaixo se aplicam à instalação do OpenJarvis a partir do código-fonte.
+
 # OpenJarvis on native Windows
 
 Phase-1 of the native-Windows-support RFC (#298). Mirrors the Linux
@@ -124,3 +137,5 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\OpenJarvis"
 
 Uninstalling does NOT remove `uv` (it's a separate tool — you may have
 other Python projects using it).
+
+</details>

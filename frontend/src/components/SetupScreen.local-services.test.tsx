@@ -134,6 +134,9 @@ describe('desktop without a model', () => {
     expect(chooser).toContain('already installed or imported');
     const modelForm = renderToStaticMarkup(<OllamaConsent onBack={vi.fn()} onConfirm={vi.fn()} />);
     expect(modelForm).toContain('exact tag of a model already installed or imported');
+    expect(modelForm).toContain('Installed Ollama models');
+    expect(modelForm).toContain('Refresh models');
+    expect(modelForm).toContain('aria-label="Ollama model tag"');
     expect(modelForm).not.toContain('ollama.com/library');
     const customForm = renderToStaticMarkup(<CustomEndpointSetup onCancel={vi.fn()} onConfirm={vi.fn()} />);
     expect(customForm).toContain('Enter a loopback URL');

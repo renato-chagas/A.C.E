@@ -2,7 +2,7 @@
 
 ## Instalar ou atualizar
 
-1. Baixe e abra [`Instalar-A.C.E.exe`](https://github.com/renato-chagas/A.C.E/releases/latest/download/Instalar-A.C.E.exe) no Windows de 64 bits. O instalador inclui Python e WebView2.
+1. Baixe e abra [`Instalar-A.C.E.exe`](https://github.com/renato-chagas/A.C.E/releases/latest/download/Instalar-A.C.E.exe) no Windows de 64 bits. Clique em **Instalar** para usar a pasta sugerida ou escolha outra. O instalador inclui Python e WebView2. Mantenha a opção de abrir o A.C.E. marcada ao concluir.
 2. Na primeira abertura, selecione **Configure model** se quiser conversar. Você pode escolher **Continue with local services** para usar memória e fontes salvas antes de configurar um modelo.
 
 Nas próximas vezes, abra o A.C.E. pelo menu Iniciar ou pelo [launcher opcional](https://github.com/renato-chagas/A.C.E/releases/latest/download/Iniciar-ACE.cmd). Para atualizar, clique no ícone perto do relógio e escolha **Sair do A.C.E.**. Rode o novo instalador mantendo a pasta da instalação existente.

@@ -2,6 +2,7 @@ import { useEffect, useReducer, useState, type FormEvent, type ReactNode } from 
 import { ArrowLeft, Cloud, Cpu, Download, Loader2, Server, ShieldCheck } from 'lucide-react';
 import {
   CLOUDFLARE_GEMMA_MODEL,
+  fetchOllamaModels,
   isTauri,
   resetInferenceSource,
   stageInferenceSource,
@@ -210,14 +211,18 @@ export function OllamaSetupGuide({ inSettings = false }: { inSettings?: boolean 
     <SetupSteps>
       <li>Install and open <a href="https://ollama.com/download" target="_blank" rel="noopener noreferrer" className="underline">Ollama</a>.</li>
       <li>
-        Run <code>ollama list</code> in a terminal. {offlineDistribution ? (
+        {offlineDistribution && !inSettings
+          ? <>Pick a model below or run <code>ollama list</code> to check its tag.</>
+          : <>Run <code>ollama list</code> in a terminal.</>}{' '}
+        {offlineDistribution ? (
           <>Use the exact tag of a model already installed or imported. To add a model, run <code>ollama pull</code> followed by the tag you chose.</>
         ) : (
           <>Use a tag from the list or choose one from the <a href="https://ollama.com/library" target="_blank" rel="noopener noreferrer" className="underline">Ollama model library</a>.</>
         )}
       </li>
       <li>
-        Enter the tag below. {inSettings
+        {(!offlineDistribution || inSettings) && 'Enter the tag below. '}
+        {inSettings
           ? <>Click <strong>Save inference source</strong> and reopen A.C.E.</>
           : <>Click <strong>Use this model and continue</strong>.</>}
         {!offlineDistribution && ' A.C.E. will download only this model if it is missing. A download can use several gigabytes.'}
@@ -225,6 +230,10 @@ export function OllamaSetupGuide({ inSettings = false }: { inSettings?: boolean 
     </SetupSteps>
   );
 }
+
+type InstalledOllamaModels =
+  | { status: 'loading' | 'unavailable' }
+  | { status: 'ready'; tags: string[] };
 
 export function OllamaConsent({
   onBack,
@@ -239,6 +248,34 @@ export function OllamaConsent({
 }) {
   const [modelTag, setModelTag] = useState('');
   const [validationError, setValidationError] = useState('');
+  const [installedModels, setInstalledModels] = useState<InstalledOllamaModels>({ status: 'loading' });
+  const [lookupAttempt, retryLookup] = useReducer((attempt: number) => attempt + 1, 0);
+  const showInstalledModels = isOfflineDistribution() && isTauri();
+  const installedTags = installedModels.status === 'ready' ? installedModels.tags : [];
+
+  useEffect(() => {
+    if (!showInstalledModels) return;
+    let active = true;
+    void fetchOllamaModels().then(
+      (models) => {
+        if (active) setInstalledModels({ status: 'ready', tags: [...new Set(models.map(({ name }) => name))] });
+      },
+      () => {
+        if (active) setInstalledModels({ status: 'unavailable' });
+      },
+    );
+    return () => { active = false; };
+  }, [showInstalledModels, lookupAttempt]);
+
+  const chooseTag = (tag: string) => {
+    setModelTag(tag);
+    setValidationError('');
+  };
+
+  const refreshModels = () => {
+    setInstalledModels({ status: 'loading' });
+    retryLookup();
+  };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -263,6 +300,41 @@ export function OllamaConsent({
           <OllamaSetupGuide />
         </div>
       </div>
+      {showInstalledModels && (
+        <div className="mb-4">
+          <div className="flex items-center justify-between gap-3 mb-1.5 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+            <label htmlFor="installed-ollama-model" className="font-medium">Installed Ollama models</label>
+            <button
+              type="button"
+              onClick={refreshModels}
+              disabled={busy || installedModels.status === 'loading'}
+              className="underline cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Refresh models
+            </button>
+          </div>
+          <select
+            id="installed-ollama-model"
+            value={installedTags.includes(modelTag) ? modelTag : ''}
+            onChange={(event) => chooseTag(event.target.value)}
+            disabled={busy || !installedTags.length}
+            className="w-full text-sm px-3 py-2 rounded-lg outline-none"
+            style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+          >
+            <option value="" disabled>Choose an installed model</option>
+            {installedTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
+          </select>
+          {installedModels.status === 'loading' && (
+            <p role="status" className="mt-1.5 text-xs">Checking installed Ollama models…</p>
+          )}
+          {installedModels.status === 'unavailable' && (
+            <p role="status" className="mt-1.5 text-xs">Open Ollama, then refresh the list or enter its model tag below.</p>
+          )}
+          {installedModels.status === 'ready' && !installedTags.length && (
+            <p role="status" className="mt-1.5 text-xs">Ollama has no models installed yet.</p>
+          )}
+        </div>
+      )}
       <label className="block text-xs font-medium mb-1.5" htmlFor="ollama-model-tag" style={{ color: 'var(--color-text-secondary)' }}>
         Ollama model tag
       </label>
@@ -271,7 +343,7 @@ export function OllamaConsent({
         aria-label="Ollama model tag"
         type="text"
         value={modelTag}
-        onChange={(event) => { setModelTag(event.target.value); setValidationError(''); }}
+        onChange={(event) => chooseTag(event.target.value)}
         placeholder="e.g. qwen3.5:4b"
         autoComplete="off"
         spellCheck={false}
@@ -286,7 +358,9 @@ export function OllamaConsent({
         style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-text-secondary)' }}
       >
         <ShieldCheck size={16} className="shrink-0" style={{ color: 'var(--color-accent)' }} />
-        Going back leaves Ollama stopped and does not save this choice.
+        {showInstalledModels
+          ? 'Your choice is saved when you continue.'
+          : 'Going back leaves Ollama stopped and does not save this choice.'}
       </div>
       {(validationError || error) && <SetupError message={validationError || error} />}
       <form onSubmit={submit}>
