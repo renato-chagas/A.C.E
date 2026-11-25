@@ -13,6 +13,11 @@ from fastapi.testclient import TestClient
 
 from openjarvis.cli import _screen
 from openjarvis.core.config import JarvisConfig
+from openjarvis.engine.cloudflare import (
+    CLOUDFLARE_MODEL_ID,
+    CloudflareEngine,
+    CloudflareInferenceError,
+)
 from openjarvis.engine.ollama import OllamaEngine
 from openjarvis.server import screen_routes
 from openjarvis.server.app import create_app
@@ -47,7 +52,12 @@ def test_local_services_reads_screen_text_once_without_inference(monkeypatch):
     )
     app = create_local_services_app(JarvisConfig())
     with _client(app) as client:
-        assert client.get(_PATH).json() == {"available": False, "text_available": True}
+        assert client.get(_PATH).json() == {
+            "available": False,
+            "text_available": True,
+            "text_question_available": False,
+            "cloud_vision_available": False,
+        }
         assert captures == []
         response = client.post(
             _PATH, json={"mode": "text"}, headers={"Origin": "http://tauri.localhost"}
@@ -86,6 +96,10 @@ def test_nonlocal_and_unauthorized_requests_cannot_capture(peer, headers, status
         {"mode": "vision"},
         {"mode": "vision", "question": "   "},
         {"mode": "vision", "question": "x" * 2001},
+        {"mode": "text-question", "question": "   "},
+        {"mode": "cloud-vision", "question": "Look"},
+        {"mode": "cloud-vision", "question": "Look", "confirm_upload": False},
+        {"mode": "cloud-vision", "question": "Look", "confirm_upload": 1},
         {"question": 23},
     ],
 )
@@ -114,7 +128,12 @@ def test_ocr_availability_and_busy_requests_fail_before_capture(monkeypatch):
 
     monkeypatch.setattr(ocr, "screen_ocr_reader", unavailable)
     with _client(create_local_services_app(JarvisConfig())) as client:
-        assert client.get(_PATH).json() == {"available": False, "text_available": False}
+        assert client.get(_PATH).json() == {
+            "available": False,
+            "text_available": False,
+            "text_question_available": False,
+            "cloud_vision_available": False,
+        }
         response = client.post(_PATH, json={"mode": "text"})
         assert response.status_code == 503
         assert "private path" not in response.text
@@ -199,6 +218,8 @@ def test_vision_sends_one_image_to_the_pinned_local_model(monkeypatch, chat_stat
             assert client.get(_PATH).json() == {
                 "available": True,
                 "text_available": False,
+                "text_question_available": False,
+                "cloud_vision_available": False,
             }
             assert not captures
             response = client.post(
@@ -223,3 +244,134 @@ def test_vision_sends_one_image_to_the_pinned_local_model(monkeypatch, chat_stat
             assert "external.test" not in response.text
     finally:
         primary.close()
+
+
+
+def test_text_question_sends_only_bounded_ocr_after_local_route_check(monkeypatch):
+    primary, calls = _mock_ollama(monkeypatch, {"capabilities": ["completion"]})
+    text = "Visible untrusted text. " * 200
+    captures = []
+
+    def capture():
+        assert [url for url, _ in calls] == [
+            "http://127.0.0.1:11434/api/show",
+            "http://127.0.0.1:11434/api/show",
+            "http://127.0.0.1:11434/api/show",
+        ]
+        captures.append(_IMAGE)
+        return _IMAGE
+
+    monkeypatch.setattr(_screen, "capture_screen_bytes", capture)
+    monkeypatch.setattr(screen_routes, "_prepare_ocr", lambda: lambda image: text)
+    try:
+        with _client(
+            create_app(primary, "fixture:latest", engine_name="ollama")
+        ) as client:
+            assert client.get(_PATH).json() == {
+                "available": False,
+                "text_available": True,
+                "text_question_available": True,
+                "cloud_vision_available": False,
+            }
+            assert not captures
+            response = client.post(
+                _PATH, json={"mode": "text-question", "question": "  What is here? "}
+            )
+            assert response.status_code == 200
+            assert response.headers["cache-control"] == "no-store"
+            assert response.json() == {"answer": "Synthetic local reply"}
+        assert captures == [_IMAGE]
+        assert calls[-1][0] == "http://127.0.0.1:11434/api/chat"
+        payload = calls[-1][1]
+        assert "tools" not in payload
+        assert "untrusted OCR data" in payload["messages"][0]["content"]
+        assert "images" not in payload["messages"][-1]
+        assert json.loads(payload["messages"][-1]["content"]) == {
+            "question": "What is here?",
+            "screen_text": text[:4000],
+            "screen_text_truncated": True,
+        }
+    finally:
+        primary.close()
+
+
+def test_text_question_refuses_remote_model_before_capture(monkeypatch):
+    primary, calls = _mock_ollama(
+        monkeypatch, {"capabilities": ["completion"], "remote_host": "example.test"}
+    )
+    monkeypatch.setattr(
+        screen_routes,
+        "_prepare_ocr",
+        lambda: pytest.fail("OCR must not be prepared for an unverified model"),
+    )
+    try:
+        with _client(
+            create_app(primary, "fixture:latest", engine_name="ollama")
+        ) as client:
+            response = client.post(
+                _PATH, json={"mode": "text-question", "question": "What is here?"}
+            )
+        assert response.status_code == 503
+        assert calls == [
+            ("http://127.0.0.1:11434/api/show", {"model": "fixture:latest:local"})
+        ]
+    finally:
+        primary.close()
+
+
+@pytest.mark.parametrize("expected_status", [200, 424, 429])
+def test_cloud_vision_requires_consent_and_supported_model(
+    monkeypatch, expected_status
+):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "a" * 32)
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "synthetic-token")
+    captures = []
+    questions = []
+
+    def capture():
+        captures.append(_IMAGE)
+        return _IMAGE
+
+    def generate(self, messages, *, model, **kwargs):
+        assert model == CLOUDFLARE_MODEL_ID
+        assert "untrusted data" in messages[0].content
+        assert messages[-1].images == [base64.b64encode(_IMAGE).decode()]
+        questions.append(messages[-1].content)
+        if expected_status == 424:
+            raise CloudflareInferenceError(403, "Cloudflare denied access.")
+        if expected_status == 429:
+            raise CloudflareInferenceError(429, "Cloudflare reached a usage limit.")
+        return {"content": "Cloud analysis fixture"}
+
+    monkeypatch.setattr(_screen, "capture_screen_bytes", capture)
+    monkeypatch.setattr(screen_routes, "_prepare_ocr", lambda: None)
+    monkeypatch.setattr(CloudflareEngine, "generate_vision", generate)
+    app = create_local_services_app(
+        JarvisConfig(), cloudflare_engine=CloudflareEngine()
+    )
+    with _client(app) as client:
+        assert client.get(_PATH).json() == {
+            "available": False,
+            "text_available": False,
+            "text_question_available": False,
+            "cloud_vision_available": True,
+        }
+        body = {"mode": "cloud-vision", "question": "  Look once  "}
+        assert client.post(_PATH, json=body).status_code == 422
+        body["confirm_upload"] = True
+        assert client.post(
+            _PATH, json=body, headers={"Origin": "https://external.test"}
+        ).status_code == 403
+        app.state.model = "@cf/moonshotai/kimi-k2.7-code"
+        assert not client.get(_PATH).json()["cloud_vision_available"]
+        assert client.post(_PATH, json=body).status_code == 503
+        app.state.model = CLOUDFLARE_MODEL_ID
+        assert not captures
+        assert not questions
+        response = client.post(_PATH, json=body)
+        assert response.status_code == expected_status
+        assert response.headers["cache-control"] == "no-store"
+        if expected_status == 200:
+            assert response.json() == {"answer": "Cloud analysis fixture"}
+    assert captures == [_IMAGE]
+    assert questions == ["Look once"]

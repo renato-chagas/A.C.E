@@ -318,7 +318,8 @@ export default function App() {
           <Route path="screen-analysis" element={
             <ScreenAnalysisPage
               backendUnavailable={backendReachable === false}
-              visionUnavailable={localInferenceUnavailable}
+              localInferenceUnavailable={localInferenceUnavailable}
+              cloudflareSelected={cloudflareOnline}
             />
           } />
           <Route path="agents" element={<AgentsPage />} />

@@ -843,13 +843,25 @@ only when a local model is configured and available.
 Open **Screen Analysis** to inspect the current primary display. Select
 **Read screen text** to extract text with local OCR, including when chat has
 no model. Windows uses an installed OCR language from the system or a local
-Tesseract installation. For layout, icons, and images, write a question and
-select **Capture and analyze** with a verified local Ollama vision model.
+Tesseract installation. Enter a question and select **Ask about screen text**
+to use the recognized text with a verified local text model. For layout,
+icons, and images, select **Capture and analyze** with a verified local
+Ollama vision model.
 
-After either click, use the three-second countdown to switch to the window
+If you selected Cloudflare Gemma 4 26B, enter a question, select **Analyze with
+Cloudflare Gemma**, and confirm **Capture and send once**. ACE sends your
+question and one image of the full primary screen to Cloudflare. The image and
+result do not enter ACE's conversation history or long-term memory.
+
+Use the three-second countdown to switch to the window
 you want to inspect. **Cancel capture** stops the countdown. ACE keeps the
 image in memory for the request and presents the result in the panel. Use
 **Clear result** to remove it from the panel.
+
+**System Monitoring** tracks CPU, available RAM, and free disk space on this
+computer. Choose **Enable monitoring** to collect alerts even when the chat
+provider is Cloudflare or no model is configured. **Live resource usage**
+shows the current readings while the panel is open.
 
 Use `jarvis ask --screen` to attach a single in-memory capture of the primary screen
 to an agent or direct inference request. Select a vision model served by a
@@ -967,11 +979,13 @@ shows the diff and requests fresh confirmation. Recovery requires the
 improvements database and source repository to be available. Reject proposals
 with `jarvis improve reject <proposal-id>`.
 
-In the ACE desktop app, open **Code Improvements** to see saved proposals,
-their status, the diff, the validation report, and the available terminal
-commands. The review screen reads the local database and works without a model
-or an internet connection. Applying and rolling back changes require terminal
-confirmation.
+In the ACE desktop app, open **Code Improvements → New code proposal** with a
+supported local model selected. Enter the absolute path to the ACE Git checkout,
+describe the change, and list the source files by repository-relative path, one
+per line. **Generate proposal** saves a diff and checks it in a disposable copy.
+The panel shows saved proposals, validation reports, and terminal commands
+without a model or an internet connection. Applying and rolling back changes
+require confirmation in the terminal.
 
 ACE keeps the affected file originals in `improvements.db` after a successful
 apply. Backups can use up to 64 MiB per proposal and stay in the local database

@@ -1,4 +1,4 @@
-"""Optional Cloudflare Workers AI text inference for ACE."""
+"""Optional Cloudflare Workers AI inference for ACE."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ class CloudflareInferenceError(EngineConnectionError):
 
 @EngineRegistry.register("cloudflare")
 class CloudflareEngine(InferenceEngine):
-    """Use the fixed Workers AI endpoint for text completions."""
+    """Use the fixed Workers AI endpoint for explicitly selected inference."""
 
     engine_id = "cloudflare"
     is_cloud = True
@@ -178,6 +178,61 @@ class CloudflareEngine(InferenceEngine):
         **kwargs: Any,
     ) -> dict[str, Any]:
         path, payload = self._request(messages, model, temperature, max_tokens, kwargs)
+        return {
+            "content": self._post(
+                path, payload, workers_envelope=model == CLOUDFLARE_MODEL_ID
+            ),
+            "usage": {},
+            "model": model,
+        }
+
+    def generate_vision(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: str,
+        temperature: float = 0.2,
+        max_tokens: int = 640,
+    ) -> dict[str, Any]:
+        """Analyze one explicitly authorized screen capture outside chat."""
+        if (
+            model != CLOUDFLARE_MODEL_ID
+            or len(messages) != 2
+            or messages[0].role != Role.SYSTEM
+            or messages[0].images
+            or messages[1].role != Role.USER
+            or len(messages[1].images or []) != 1
+            or any(item.tool_call_id or item.tool_calls for item in messages)
+        ):
+            raise CloudflareInferenceError(
+                400, "Gemma screen analysis requires one image and one question."
+            )
+        system, user = messages
+        path, payload = self._request(
+            [system, Message(role=Role.USER, content=user.text)],
+            model,
+            temperature,
+            max_tokens,
+            {},
+        )
+        image = user.images[0]
+        payload["messages"][1]["content"] = [
+            {"type": "text", "text": user.text},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image}"},
+            },
+        ]
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+        return {
+            "content": self._post(path, payload, workers_envelope=True),
+            "usage": {},
+            "model": model,
+        }
+
+    def _post(
+        self, path: str, payload: dict[str, Any], *, workers_envelope: bool
+    ) -> str:
         try:
             with httpx.Client(**self._client_options()) as client:
                 response = client.post(path, json=payload)
@@ -187,13 +242,7 @@ class CloudflareEngine(InferenceEngine):
             ) from None
         except httpx.HTTPError:
             raise CloudflareInferenceError(502, _NETWORK) from None
-        return {
-            "content": self._read_content(
-                response, workers_envelope=model == CLOUDFLARE_MODEL_ID
-            ),
-            "usage": {},
-            "model": model,
-        }
+        return self._read_content(response, workers_envelope=workers_envelope)
 
     async def stream(
         self,

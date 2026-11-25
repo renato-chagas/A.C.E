@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from openjarvis.core.config import JarvisConfig
 from openjarvis.proactive.desktop_monitor import DesktopMonitorConflict
-from openjarvis.proactive.local_monitor import LocalMonitorStore
+from openjarvis.proactive.local_monitor import LocalMonitorStore, LocalProactiveMonitor
 from openjarvis.server.app import create_app
 from openjarvis.server.local_services import create_local_services_app
 
@@ -84,6 +84,7 @@ def test_monitor_status_has_no_write_side_effects_and_patch_is_an_explicit_opt_i
             "notifications_enabled": False,
             "history_available": True,
             "incidents": [],
+            "readings": None,
         }
         assert not database.exists()
         assert controller.calls == []
@@ -113,6 +114,48 @@ def test_monitor_status_has_no_write_side_effects_and_patch_is_an_explicit_opt_i
         assert end.json()["running"] is False
         assert end.json()["notifications_enabled"] is False
         assert controller.calls == [(True, False), (False, False)]
+
+
+def test_enabled_monitor_returns_only_local_readings_without_model_or_alerts(
+    monitor, monkeypatch
+):
+    app, controller, database = monitor
+    expected = {
+        "cpu_percent": 28.5,
+        "memory_available_gb": 8.0,
+        "disk_free_gb": 123.0,
+    }
+    samples = []
+
+    def sample():
+        samples.append(True)
+        return {**expected, "private_path": "Private system path"}
+
+    def reject_inference(*args, **kwargs):
+        pytest.fail("Reading resource measurements must not call inference")
+
+    monkeypatch.setattr(LocalProactiveMonitor, "_sample", staticmethod(sample))
+    monkeypatch.setattr(
+        "openjarvis.server.local_monitor_routes.pinned_local_inference", reject_inference
+    )
+    with _client(app) as client:
+        stopped = client.get(_ROUTE, headers=_AUTH)
+        assert stopped.json()["readings"] is None
+        assert samples == []
+
+        controller.enabled = True
+        controller.running = True
+        foreign = client.get(_ROUTE, headers=_AUTH | {"Origin": "https://remote.example"})
+        _uncached(foreign, 403)
+        assert samples == []
+
+        live = client.get(_ROUTE, headers=_AUTH | _WEBVIEW)
+        _uncached(live, 200)
+        assert live.json()["readings"] == expected
+        assert live.json()["incidents"] == []
+        assert samples == [True]
+        assert controller.calls == []
+        assert not database.exists()
 
 
 def test_monitor_notification_choice_is_reported_on_inspection(monitor):

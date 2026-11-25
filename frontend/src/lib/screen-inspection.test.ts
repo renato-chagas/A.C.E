@@ -20,12 +20,19 @@ afterEach(() => {
 describe('screen inspection client', () => {
   it('checks capabilities and sends each explicit action only to its local origin', async () => {
     connection.base = 'http://[::1]:8001';
-    const status = { available: true, text_available: true };
+    const status = {
+      available: true,
+      text_available: true,
+      text_question_available: true,
+      cloud_vision_available: true,
+    };
     const answer = '<script>literal screen text</script>';
     const send = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(Response.json(status))
       .mockResolvedValueOnce(Response.json({ answer }))
-      .mockResolvedValueOnce(Response.json({ answer: 'Local analysis' }));
+      .mockResolvedValueOnce(Response.json({ answer: 'Local analysis' }))
+      .mockResolvedValueOnce(Response.json({ answer: 'Local OCR analysis' }))
+      .mockResolvedValueOnce(Response.json({ answer: 'Cloud analysis' }));
     const client = createScreenInspectionClient()!;
     connection.base = 'https://remote.example';
 
@@ -33,6 +40,10 @@ describe('screen inspection client', () => {
     await expect(client.inspect({ mode: 'text' }, signal)).resolves.toBe(answer);
     const vision = { mode: 'vision', question: 'What do you see?' } as const;
     await expect(client.inspect(vision, signal)).resolves.toBe('Local analysis');
+    const ocrQuestion = { mode: 'text-question', question: 'What text do you see?' } as const;
+    await expect(client.inspect(ocrQuestion, signal)).resolves.toBe('Local OCR analysis');
+    const cloudVision = { mode: 'cloud-vision', question: 'What do you see?', confirm_upload: true } as const;
+    await expect(client.inspect(cloudVision, signal)).resolves.toBe('Cloud analysis');
 
     const options = {
       signal,
@@ -46,7 +57,8 @@ describe('screen inspection client', () => {
       ...options, method: 'GET', body: undefined,
       headers: { Authorization: 'Bearer local-fixture' },
     }));
-    for (const [index, body] of [[2, { mode: 'text' }], [3, vision]] as const) {
+    const actions = [[2, { mode: 'text' }], [3, vision], [4, ocrQuestion], [5, cloudVision]] as const;
+    for (const [index, body] of actions) {
       expect(send).toHaveBeenNthCalledWith(index, endpoint, expect.objectContaining({
         ...options, method: 'POST', body: JSON.stringify(body),
         headers: { Authorization: 'Bearer local-fixture', 'Content-Type': 'application/json' },
@@ -76,6 +88,25 @@ describe('screen inspection client', () => {
     const client = createScreenInspectionClient()!;
     await expect(client.inspect({ mode: 'text' }, signal)).rejects.toThrow('Local text recognition or screen capture is unavailable.');
     await expect(client.inspect({ mode: 'vision', question: 'What is here?' }, signal)).rejects.toThrow('The local vision model could not analyze this capture.');
+  });
+
+  it('keeps newer actions disabled with an older backend', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(Response.json({ available: true, text_available: true }));
+    const client = createScreenInspectionClient()!;
+    await expect(client.status(signal)).resolves.toEqual({
+      available: true, text_available: true, text_question_available: false, cloud_vision_available: false,
+    });
+  });
+
+  it('reports Cloudflare credential and usage errors without using upstream response details', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(Response.json({ detail: 'private token' }, { status: 424 }))
+      .mockResolvedValueOnce(Response.json({ detail: 'private account id' }, { status: 429 }));
+    const client = createScreenInspectionClient()!;
+    const cloudVision = { mode: 'cloud-vision', question: 'Look once', confirm_upload: true } as const;
+    await expect(client.inspect(cloudVision, signal)).rejects.toThrow('Cloudflare denied access');
+    await expect(client.inspect(cloudVision, signal)).rejects.toThrow('Cloudflare reached a usage or rate limit');
   });
 
   it('validates availability and requires a nonempty result', async () => {

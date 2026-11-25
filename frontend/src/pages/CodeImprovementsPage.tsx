@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   createCodeImprovementsClient,
   type CodeImprovementProposal,
@@ -10,6 +10,8 @@ const border = { borderColor: 'var(--color-border)' };
 const errorText = { color: 'var(--color-error)' };
 const panel = 'rounded-xl border p-4';
 const pre = 'max-h-[28rem] overflow-auto rounded-lg border p-3 text-xs font-mono';
+const draftField = 'w-full rounded-lg border bg-transparent px-3 py-2 text-sm';
+const draftLimits = { repository: 1024, task: 4000, files: 24, file: 512 };
 const statuses: ReadonlyMap<string, string> = new Map([
   ['proposed', 'Proposed'],
   ['validated', 'Validated'],
@@ -104,6 +106,12 @@ export function CodeImprovementsPage() {
   const [listError, setListError] = useState('');
   const [detailError, setDetailError] = useState('');
   const [refresh, setRefresh] = useState(0);
+  const [generating, setGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState('');
+  const [generationStatus, setGenerationStatus] = useState('');
+  const generationRequest = useRef<AbortController | null>(null);
+
+  useEffect(() => () => generationRequest.current?.abort(), []);
 
   useEffect(() => {
     if (!client) return;
@@ -140,14 +148,57 @@ export function CodeImprovementsPage() {
     setSelected(id);
   };
 
+  const generateProposal = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!client || generationRequest.current) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const repository = String(data.get('repository') ?? '').trim();
+    const task = String(data.get('task') ?? '').trim();
+    const files = [...new Set(String(data.get('files') ?? '')
+      .split(/\r?\n/)
+      .map((file) => file.trim())
+      .filter(Boolean))];
+    setGenerationError('');
+    setGenerationStatus('');
+    if (!repository || !task || !files.length) {
+      setGenerationError('Enter the repository path, the change to make, and at least one source file.');
+      return;
+    }
+    if (files.length > draftLimits.files || files.some((file) => file.length > draftLimits.file)) {
+      setGenerationError('Enter up to ' + draftLimits.files + ' file paths with at most ' + draftLimits.file + ' characters per path.');
+      return;
+    }
+    const controller = new AbortController();
+    generationRequest.current = controller;
+    setGenerating(true);
+    try {
+      const saved = await client.generate({ repository, task, files }, controller.signal);
+      if (controller.signal.aborted) return;
+      form.reset();
+      setProposal(saved);
+      setSelected(saved.proposal_id);
+      setListError('');
+      setDetailError('');
+      setRefresh((value) => value + 1);
+      setGenerationStatus(saved.status === 'proposed'
+        ? 'Proposal saved. Review the patch and complete validation before applying.'
+        : 'Proposal saved. Review the patch and validation below.');
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setGenerationError(error instanceof Error ? error.message : 'Could not generate the proposal.');
+      }
+    } finally {
+      generationRequest.current = null;
+      if (!controller.signal.aborted) setGenerating(false);
+    }
+  };
+
   return (
     <section className="h-full min-h-0 overflow-y-auto p-5 md:p-8" style={{ color: 'var(--color-text)' }}>
       <div className="mx-auto w-full max-w-5xl space-y-5">
         <header className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold">Code improvements</h1>
-            <p className="mt-1 text-sm" style={muted}>Review the latest code proposals saved by ACE on this computer.</p>
-          </div>
+          <h1 className="text-2xl font-semibold">Code improvements</h1>
           {client && (
             <button
               type="button"
@@ -161,6 +212,61 @@ export function CodeImprovementsPage() {
           )}
         </header>
 
+        {client && (
+          <details className={panel} style={border}>
+            <summary className="cursor-pointer font-medium">New code proposal</summary>
+            <form
+              method="post"
+              className="mt-3 space-y-3"
+              onSubmit={(event) => void generateProposal(event)}
+              aria-describedby="draft-permissions"
+            >
+              <p id="draft-permissions" className="text-sm" style={muted}>
+                ACE reads the selected files with a local model to draft a patch.
+                Applying the patch requires separate confirmation in the terminal.
+              </p>
+              <fieldset className="min-w-0 space-y-3 disabled:opacity-60" disabled={generating}>
+                <label className="block space-y-1 text-sm">
+                  <span>Full path to the local Git repository</span>
+                  <input
+                    name="repository"
+                    className={draftField}
+                    style={border}
+                    placeholder="A:/Projects/ACE"
+                    maxLength={draftLimits.repository}
+                    required
+                  />
+                </label>
+                <label className="block space-y-1 text-sm">
+                  <span>Change to make</span>
+                  <textarea name="task" className={draftField} style={border} rows={3} maxLength={draftLimits.task} required />
+                </label>
+                <label className="block space-y-1 text-sm">
+                  <span>Source files, one repository-relative path per line</span>
+                  <textarea
+                    name="files"
+                    className={draftField}
+                    style={border}
+                    placeholder="src/openjarvis/example.py"
+                    rows={3}
+                    maxLength={(draftLimits.file + 2) * draftLimits.files}
+                    spellCheck={false}
+                    required
+                  />
+                </label>
+                <button type="submit" className="rounded-lg border px-3 py-2 text-sm font-medium" style={border}>
+                  {generating ? 'Generating proposal…' : 'Generate proposal'}
+                </button>
+              </fieldset>
+              {generationError && <p role="alert" className="text-sm" style={errorText}>{generationError}</p>}
+              {(generating || generationStatus) && (
+                <p role="status" className="text-sm" style={muted}>
+                  {generating ? 'Waiting for the local model. This can take a few minutes.' : generationStatus}
+                </p>
+              )}
+            </form>
+          </details>
+        )}
         {!client ? (
           <p role="alert" className="text-sm" style={errorText}>Open ACE on this computer and use a direct local API address in Settings.</p>
         ) : (

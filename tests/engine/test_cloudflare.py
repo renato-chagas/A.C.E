@@ -206,18 +206,26 @@ async def test_alternative_models_use_cloudflare_chat_completion(
             "store": False,
         }
         return httpx.Response(
-            200, json={"choices": [{"message": {
-                "content": "Até logo!", "reasoning_content": "Fixture only",
-            }}]}
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Até logo!",
+                            "reasoning_content": "Fixture only",
+                        }
+                    }
+                ]
+            },
         )
 
     transport_factory(answer)
     assert configured.can_serve(selected)
     reply = configured.generate(_MESSAGES, model=selected)
     assert reply["model"] == selected and reply["content"] == "Até logo!"
-    assert [
-        text async for text in configured.stream(_MESSAGES, model=selected)
-    ] == ["Até logo!"]
+    assert [text async for text in configured.stream(_MESSAGES, model=selected)] == [
+        "Até logo!"
+    ]
 
 
 def test_unapproved_inputs_and_missing_credential_are_rejected_before_http(
@@ -254,6 +262,45 @@ def test_unapproved_inputs_and_missing_credential_are_rejected_before_http(
     monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "../../alternate")
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", _TOKEN)
     assert not CloudflareEngine().health()
+
+
+def test_explicit_gemma_vision_sends_one_inline_png(configured, transport_factory):
+    messages = [
+        Message(Role.SYSTEM, "Describe the screen."),
+        Message(Role.USER, "Quais ícones aparecem?", images=["iVBORw0KGgo="]),
+    ]
+
+    def answer(request):
+        assert request.url.path == _PATH
+        body = json.loads(request.content)
+        assert body["messages"] == [
+            {"role": "system", "content": "Describe the screen."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Quais ícones aparecem?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                    },
+                ],
+            },
+        ]
+        assert body["store"] is False
+        assert body["stream"] is False
+        assert "tools" not in body
+        return httpx.Response(
+            200,
+            json={"result": {"choices": [{"message": {"content": "Ícone azul."}}]}},
+        )
+
+    transport_factory(answer)
+    with pytest.raises(CloudflareInferenceError):
+        configured.generate_vision(messages, model="@cf/openai/gpt-oss-20b")
+    assert (
+        configured.generate_vision(messages, model=CLOUDFLARE_MODEL_ID)["content"]
+        == "Ícone azul."
+    )
 
 
 def test_cloudflare_discovery_requires_explicit_choice(configured, monkeypatch):

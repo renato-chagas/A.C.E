@@ -76,6 +76,17 @@ describe('local monitoring client', () => {
     expect(createLocalMonitorClient()).toBeNull();
   });
 
+  it('preserves valid live readings and keeps alert controls usable if readings are invalid', async () => {
+    const readings = { cpu_percent: 31, memory_available_gb: 8, disk_free_gb: null };
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(Response.json({ ...running, readings }))
+      .mockResolvedValueOnce(Response.json({ ...running, readings: { ...readings, cpu_percent: 200 } }));
+    const client = createLocalMonitorClient()!;
+
+    await expect(client.status(signal)).resolves.toEqual({ ...running, readings });
+    await expect(client.status(signal)).resolves.toEqual(running);
+  });
+
   it('does not display arbitrary detail from a conflict response', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ detail: 'private path' }, { status: 409 }));
     await expect(createLocalMonitorClient()!.setEnabled(true, signal)).rejects.toThrow(

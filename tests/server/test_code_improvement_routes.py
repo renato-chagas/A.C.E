@@ -1,10 +1,11 @@
-"""Tests for the local, read-only code improvement review API."""
+"""Tests for the local code improvement proposal and review API."""
 
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 import pytest
@@ -225,3 +226,82 @@ def test_invalid_input_and_corruption_do_not_echo_private_data(api):
         response = client.get(_ROUTE)
         _assert_uncached(response, 503)
         assert response.json() == {"detail": "Code improvement storage is unavailable."}
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="Git required")
+def test_creates_validated_local_draft_without_editing_checkout(tmp_path, monkeypatch):
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    monkeypatch.setenv("OPENJARVIS_HOME", str(profile))
+    repository = tmp_path / "source"
+    (repository / ".git").mkdir(parents=True)
+    source = repository / "example.py"
+    source.write_bytes(b"value = 1\n")
+    (repository / "unselected.py").write_bytes(b"UNSELECTED = True\n")
+    patch = "--- a/example.py\n+++ b/example.py\n@@ -1 +1 @@\n-value = 1\n+value = 2\n"
+    calls = []
+
+    class SelectedModel:
+        def generate(self, messages, **kwargs):
+            assert not kwargs.get("tools")
+            calls.append(kwargs["model"])
+            assert "value = 1" in messages[1].text
+            assert "UNSELECTED" not in messages[1].text
+            return {"content": patch}
+
+    @contextmanager
+    def pinned(_state, *, capability):
+        assert capability == "completion"
+        yield SelectedModel(), "local-model"
+
+    def unexpected_recovery(*_args):
+        pytest.fail("A desktop draft must not recover a prior apply or rollback.")
+
+    monkeypatch.setattr(code_improvement_routes, "pinned_local_inference", pinned)
+    monkeypatch.setattr(
+        CodeImprovementManager, "_recover_interrupted_applies", unexpected_recovery
+    )
+    with _client(create_app(object(), "local-model")) as client:
+        response = client.post(
+            _ROUTE,
+            headers={"Origin": "http://tauri.localhost"},
+            json={
+                "repository": str(repository),
+                "task": "Change the value",
+                "files": ["example.py"],
+            },
+        )
+        _assert_uncached(response, 201)
+        draft = response.json()
+        assert draft["status"] == "validated"
+        assert draft["validation_receipt"]
+        assert draft["files"] == ["example.py"]
+        assert client.get(f"{_ROUTE}/{draft['proposal_id']}").json() == draft
+    assert source.read_bytes() == b"value = 1\n"
+    assert calls == ["local-model"]
+
+
+def test_post_refuses_nonlocal_model_and_invalid_input_before_writing(api):
+    app, database = api
+    body = {
+        "repository": str(database.parent),
+        "task": "private request",
+        "files": ["example.py"],
+    }
+    with _client(app) as client:
+        _assert_uncached(
+            client.post(
+                _ROUTE, json=body, headers={"Origin": "https://public.example"}
+            ),
+            403,
+        )
+        for response, status in (
+            (client.post(_ROUTE, json=body), 503),
+            (client.post(_ROUTE, json={**body, "files": []}), 422),
+            (client.post(_ROUTE, json={**body, "apply": True}), 422),
+            (client.post(_ROUTE, content=json.dumps(body)), 415),
+            (client.post(_ROUTE, json={**body, "task": "x" * (140 * 1024)}), 413),
+        ):
+            _assert_uncached(response, status)
+            assert "private request" not in response.text
+    assert not database.exists()

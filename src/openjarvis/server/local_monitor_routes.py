@@ -12,14 +12,18 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, HTTPException, Path, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.types import Message
 
 from openjarvis.core.paths import ConfigurationError, get_config_dir
 from openjarvis.engine._pinned_inference import pinned_local_inference
 from openjarvis.memory.service import _build_scanner, _build_secret_scanner
 from openjarvis.proactive.desktop_monitor import DesktopMonitorConflict
-from openjarvis.proactive.local_monitor import _DEFAULT_DB_NAME, LocalMonitorStore
+from openjarvis.proactive.local_monitor import (
+    _DEFAULT_DB_NAME,
+    LocalMonitorStore,
+    LocalProactiveMonitor,
+)
 from openjarvis.proactive.reasoning import (
     LocalIncidentReasoner,
     measured_incident_fallback,
@@ -126,6 +130,12 @@ class MonitorIncident(BaseModel):
     assessments: list[MonitorAssessment]
 
 
+class MonitorReadings(BaseModel):
+    cpu_percent: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    memory_available_gb: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    disk_free_gb: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
 class LocalMonitorStatus(BaseModel):
     enabled: bool
     running: bool
@@ -133,6 +143,7 @@ class LocalMonitorStatus(BaseModel):
     notifications_enabled: bool
     history_available: bool
     incidents: list[MonitorIncident]
+    readings: MonitorReadings | None = None
 
 
 def _read_status(
@@ -166,6 +177,13 @@ def _read_status(
         # The stop control must remain available when history cannot be read.
         history_available = False
         incidents = []
+    readings = None
+    if enabled:
+        try:
+            readings = MonitorReadings.model_validate(LocalProactiveMonitor._sample())
+        except (OSError, RuntimeError, ValueError):
+            # Sensor failures must not disable access to alert history or controls.
+            pass
     return LocalMonitorStatus(
         enabled=enabled,
         running=running,
@@ -173,6 +191,7 @@ def _read_status(
         notifications_enabled=notifications_enabled,
         history_available=history_available,
         incidents=incidents,
+        readings=readings,
     )
 
 

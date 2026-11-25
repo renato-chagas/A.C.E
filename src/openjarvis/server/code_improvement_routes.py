@@ -1,4 +1,4 @@
-"""Read-only, loopback routes for reviewing local code improvement proposals."""
+"""Loopback routes for creating and reviewing code improvement proposals."""
 
 from __future__ import annotations
 
@@ -6,18 +6,32 @@ import json
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import closing, contextmanager
+from dataclasses import asdict
+from pathlib import Path as FilePath
+from threading import Lock
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import Message
 
 from openjarvis.core.paths import ConfigurationError, get_config_dir
+from openjarvis.engine._pinned_inference import pinned_local_inference
+from openjarvis.learning.code_improvement import (
+    CodeImprovementManager,
+    assert_no_secrets,
+    generate_local_patch,
+)
 from openjarvis.server.api_routes import _allows_private_memory_access
 
 _NO_STORE = {"Cache-Control": "no-store"}
 _UNAVAILABLE = "Code improvement storage is unavailable."
+_INVALID = "Invalid code improvement request."
+_BODY_LIMIT = 128 * 1024
+_PROPOSAL_LOCK = Lock()
 
 
 class _PrivateReviewRoute(APIRoute):
@@ -25,20 +39,60 @@ class _PrivateReviewRoute(APIRoute):
         handler = super().get_route_handler()
 
         async def restricted(request: Request) -> Response:
-            if not _allows_private_memory_access(request):
-                raise HTTPException(
-                    403, "Direct local access is required.", headers=_NO_STORE
-                )
             try:
+                if not _allows_private_memory_access(request):
+                    raise HTTPException(403, "Direct local access is required.")
+                if request.method == "POST":
+                    media_type = request.headers.get("content-type", "").split(";", 1)[
+                        0
+                    ]
+                    if media_type.strip().lower() != "application/json":
+                        raise HTTPException(415, "Use an application/json request.")
+                    request = _bounded_body(request)
                 response = await handler(request)
             except RequestValidationError:
-                raise HTTPException(
-                    422, "Invalid code improvement request.", headers=_NO_STORE
-                ) from None
+                raise HTTPException(422, _INVALID, headers=_NO_STORE) from None
+            except StarletteHTTPException as exc:
+                exc.headers = {**(exc.headers or {}), **_NO_STORE}
+                raise
             response.headers.update(_NO_STORE)
             return response
 
         return restricted
+
+
+def _bounded_body(request: Request) -> Request:
+    try:
+        size = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        size = -1
+    if size < 0:
+        raise HTTPException(400, _INVALID)
+    if size > _BODY_LIMIT:
+        raise HTTPException(413, _INVALID)
+
+    received = 0
+
+    async def receive() -> Message:
+        nonlocal received
+        message = await request.receive()
+        if message["type"] == "http.request":
+            received += len(message.get("body", b""))
+            if received > _BODY_LIMIT:
+                raise HTTPException(413, _INVALID)
+        return message
+
+    return Request(request.scope, receive)
+
+
+class CodeImprovementRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+
+    repository: str = Field(min_length=1, max_length=1024)
+    task: str = Field(min_length=1, max_length=4000)
+    files: list[Annotated[str, StringConstraints(min_length=1, max_length=512)]] = (
+        Field(min_length=1, max_length=24)
+    )
 
 
 class CodeImprovementSummary(BaseModel):
@@ -122,6 +176,56 @@ router = APIRouter(
     tags=["code improvements"],
     route_class=_PrivateReviewRoute,
 )
+
+
+@router.post("", status_code=201)
+def create_code_improvement(
+    body: CodeImprovementRequest, request: Request
+) -> CodeImprovementDetail:
+    root = FilePath(body.repository)
+    if not root.is_absolute() or root.drive.startswith(("\\", "//")):
+        raise HTTPException(422, "Enter the absolute path to a local Git checkout.")
+    if not _PROPOSAL_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "Another code proposal is already being prepared.")
+    try:
+        with pinned_local_inference(
+            request.app.state, capability="completion"
+        ) as model:
+            if model is None:
+                raise HTTPException(503, "Select and start a supported local model.")
+            try:
+                if not (root / ".git").exists():
+                    raise HTTPException(
+                        422, "Enter the path to an existing Git checkout."
+                    )
+                assert_no_secrets(body.task)
+                patch, hashes = generate_local_patch(
+                    body.task,
+                    tuple(dict.fromkeys(body.files)),
+                    root,
+                    pinned_model=model,
+                )
+                # Preparing a draft must not resume a previous apply or rollback.
+                manager = CodeImprovementManager(recover=False)
+                proposal = manager.propose(
+                    root, body.task, patch, expected_source_hashes=hashes
+                )
+            except ValueError:
+                raise HTTPException(
+                    422, "Check the selected source files and request a smaller change."
+                ) from None
+            except (OSError, RuntimeError, sqlite3.Error):
+                raise HTTPException(
+                    503, "Could not prepare a proposal with the local model and Git."
+                ) from None
+        try:
+            proposal = manager.validate(proposal.proposal_id)
+        except (OSError, RuntimeError, ValueError, sqlite3.Error):
+            # Keep the saved diff as a draft when isolated validation fails.
+            pass
+        return CodeImprovementDetail(rollback_available=False, **asdict(proposal))
+    finally:
+        _PROPOSAL_LOCK.release()
 
 
 @router.get("")

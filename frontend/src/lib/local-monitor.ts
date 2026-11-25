@@ -28,6 +28,12 @@ export type MonitorIncident = {
   assessments: MonitorAssessment[];
 };
 
+export type MonitorReadings = {
+  cpu_percent: number | null;
+  memory_available_gb: number | null;
+  disk_free_gb: number | null;
+};
+
 export type LocalMonitorStatus = {
   enabled: boolean;
   running: boolean;
@@ -35,10 +41,24 @@ export type LocalMonitorStatus = {
   notifications_enabled: boolean;
   history_available: boolean;
   incidents: MonitorIncident[];
+  readings?: MonitorReadings;
 };
 
 function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isReading(value: unknown, limit = Infinity): value is number | null {
+  return value === null ||
+    (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= limit);
+}
+
+function isReadings(value: unknown): value is MonitorReadings {
+  if (!value || typeof value !== 'object') return false;
+  const readings = value as Partial<MonitorReadings>;
+  return isReading(readings.cpu_percent, 100) &&
+    isReading(readings.memory_available_gb) &&
+    isReading(readings.disk_free_gb);
 }
 
 function isAssessment(value: unknown): value is MonitorAssessment {
@@ -131,6 +151,7 @@ export function createLocalMonitorClient() {
       notifications_enabled: data.notifications_enabled ?? false,
       history_available: data.history_available,
       incidents: data.incidents,
+      ...(isReadings(data.readings) ? { readings: data.readings } : {}),
     };
   }
 

@@ -5,11 +5,14 @@ export const SCREEN_QUESTION_LIMIT = 2000;
 
 export type ScreenInspection =
   | { mode: 'text' }
-  | { mode: 'vision'; question: string };
+  | { mode: 'vision' | 'text-question'; question: string }
+  | { mode: 'cloud-vision'; question: string; confirm_upload: true };
 
 export type ScreenAvailability = {
   available: boolean;
   text_available: boolean;
+  text_question_available: boolean;
+  cloud_vision_available: boolean;
 };
 
 export function createScreenInspectionClient() {
@@ -40,15 +43,27 @@ export function createScreenInspectionClient() {
     if (response.status === 409) throw new Error('Another screen inspection is already running.');
     if (inspection) {
       if (response.status === 422) throw new Error('Check the question and try again.');
+      if (inspection.mode === 'cloud-vision') {
+        if (response.status === 424) throw new Error('Cloudflare denied access. Check the account and token permissions.');
+        if (response.status === 429) throw new Error('Cloudflare reached a usage or rate limit.');
+      }
       if (response.status === 503) {
-        throw new Error(inspection.mode === 'text'
-          ? 'Local text recognition or screen capture is unavailable.'
-          : 'A compatible local vision model and screen capture are required.');
+        const messages = {
+          text: 'Local text recognition or screen capture is unavailable.',
+          vision: 'A compatible local vision model and screen capture are required.',
+          'text-question': 'Local text recognition, screen capture, and a compatible local model are required.',
+          'cloud-vision': 'Cloudflare Gemma 4 or screen capture is unavailable.',
+        };
+        throw new Error(messages[inspection.mode]);
       }
       if (response.status === 502) {
-        throw new Error(inspection.mode === 'text'
-          ? 'ACE could not read text from this capture.'
-          : 'The local vision model could not analyze this capture.');
+        const messages = {
+          text: 'ACE could not read text from this capture.',
+          vision: 'The local vision model could not analyze this capture.',
+          'text-question': 'ACE could not read or analyze the text in this capture.',
+          'cloud-vision': 'Cloudflare could not analyze this capture.',
+        };
+        throw new Error(messages[inspection.mode]);
       }
     }
     if (!response.ok) {
@@ -64,7 +79,12 @@ export function createScreenInspectionClient() {
       if (typeof data?.available !== 'boolean' || typeof data.text_available !== 'boolean') {
         throw new Error('ACE returned invalid screen analysis availability.');
       }
-      return { available: data.available, text_available: data.text_available };
+      return {
+        available: data.available,
+        text_available: data.text_available,
+        text_question_available: data.text_question_available === true,
+        cloud_vision_available: data.cloud_vision_available === true,
+      };
     },
     async inspect(inspection: ScreenInspection, signal: AbortSignal): Promise<string> {
       const response = await request(signal, inspection);

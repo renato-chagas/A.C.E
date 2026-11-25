@@ -5,7 +5,7 @@ const connection = vi.hoisted(() => ({ base: 'http://127.0.0.1:8000', desktop: t
 vi.mock('./api', () => ({
   getBase: () => connection.base,
   isTauri: () => connection.desktop,
-  authHeaders: () => ({ Authorization: 'Bearer local-fixture' }),
+  authHeaders: (extra = {}) => ({ Authorization: 'Bearer local-fixture', ...extra }),
 }));
 
 const summary: CodeImprovementSummary = {
@@ -22,6 +22,11 @@ const proposal = {
   patch: '-old\\n+new',
   validation: 'Tests passed.',
   validation_receipt: 'a'.repeat(64),
+};
+const draft = {
+  repository: proposal.repository,
+  task: 'Melhore a validação.',
+  files: summary.files,
 };
 const { signal } = new AbortController();
 
@@ -55,6 +60,35 @@ describe('local code improvement review', () => {
     const endpoint = 'http://[::1]:8765/v1/code-improvements';
     expect(fetch).toHaveBeenNthCalledWith(1, endpoint + '?limit=50', options);
     expect(fetch).toHaveBeenNthCalledWith(2, endpoint + '/' + summary.proposal_id, options);
+  });
+
+  it('sends the requested draft only to the direct local API and reads the saved proposal', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValue(Response.json({ ...proposal, status: 'proposed' }, { status: 201 }));
+    const api = createCodeImprovementsClient()!;
+    connection.base = 'https://remote.example';
+
+    await expect(api.generate(draft, signal)).resolves.toEqual({ ...proposal, status: 'proposed' });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('http://127.0.0.1:8000/v1/code-improvements', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer local-fixture', 'Content-Type': 'application/json' },
+      body: JSON.stringify(draft),
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'error',
+      referrerPolicy: 'no-referrer',
+      signal,
+    });
+  });
+
+  it.each([
+    [409, 'A proposal is already being generated'],
+    [422, 'Check the Git repository'],
+    [503, 'Select a running local model'],
+  ])('reports proposal generation error %i without exposing the response body', async (status, message) => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValue(Response.json({ detail: 'Private details' }, { status }));
+    await expect(createCodeImprovementsClient()!.generate(draft, signal)).rejects.toThrow(message);
   });
 
   it.each(['https://remote.example', 'http://127.0.0.1.remote.example', '/api'])(

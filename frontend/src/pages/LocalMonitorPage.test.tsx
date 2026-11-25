@@ -67,6 +67,22 @@ describe('system monitoring', () => {
     expect(html).not.toContain('disabled=""');
   });
 
+  it('shows current readings with no model or alerts', () => {
+    const running = {
+      ...status,
+      enabled: true,
+      running: true,
+      incidents: [],
+      readings: { cpu_percent: 0, memory_available_gb: 8, disk_free_gb: 123.5 },
+    };
+    const html = renderToStaticMarkup(<LocalMonitorOverview status={running} onChange={vi.fn()} />);
+    expect(html).toContain('Live resource usage');
+    expect(html).toContain('0.0%');
+    expect(html).toContain('8.0 GiB');
+    expect(html).toContain('123.5 GiB');
+    expect(html).toContain('No resource alerts');
+  });
+
   it('blocks changes while the daemon is stopping', () => {
     const stopping = { ...status, running: true };
     const html = renderToStaticMarkup(<LocalMonitorOverview status={stopping} onChange={vi.fn()} />);

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Button } from '../components/ui/button';
 import {
   createScreenInspectionClient,
@@ -16,10 +16,12 @@ type InspectionResult = { mode: ScreenInspection['mode']; answer: string };
 
 export function ScreenAnalysisPage({
   backendUnavailable = false,
-  visionUnavailable = false,
+  localInferenceUnavailable = false,
+  cloudflareSelected = false,
 }: {
   backendUnavailable?: boolean;
-  visionUnavailable?: boolean;
+  localInferenceUnavailable?: boolean;
+  cloudflareSelected?: boolean;
 }) {
   const [client] = useState(createScreenInspectionClient);
   const [availability, setAvailability] = useState<ScreenAvailability | null>(null);
@@ -28,6 +30,7 @@ export function ScreenAnalysisPage({
   const [refresh, setRefresh] = useState(0);
   const [question, setQuestion] = useState('Describe what is visible on the screen.');
   const [pending, setPending] = useState<PendingCapture | null>(null);
+  const [cloudQuestion, setCloudQuestion] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(COUNTDOWN_SECONDS);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState('');
@@ -36,8 +39,19 @@ export function ScreenAnalysisPage({
   const request = useRef<{ controller: AbortController; mode: ScreenInspection['mode'] } | null>(null);
 
   const textReady = !backendUnavailable && availability?.text_available === true;
-  const visionReady = !backendUnavailable && !visionUnavailable && availability?.available === true;
-  const pendingAllowed = pending?.inspection.mode === 'text' ? textReady : visionReady;
+  const localModelReady = !backendUnavailable && !localInferenceUnavailable;
+  const visionReady = localModelReady && availability?.available === true;
+  const textQuestionReady = localModelReady && availability?.text_question_available === true;
+  const cloudVisionReady = !backendUnavailable && cloudflareSelected && availability?.cloud_vision_available === true;
+  const modeReady = useCallback((mode: ScreenInspection['mode']) => {
+    switch (mode) {
+      case 'text': return textReady;
+      case 'vision': return visionReady;
+      case 'text-question': return textQuestionReady;
+      case 'cloud-vision': return cloudVisionReady;
+    }
+  }, [textReady, visionReady, textQuestionReady, cloudVisionReady]);
+  const pendingAllowed = pending !== null && modeReady(pending.inspection.mode);
 
   useEffect(() => {
     if (!client || backendUnavailable) {
@@ -61,7 +75,7 @@ export function ScreenAnalysisPage({
       },
     );
     return () => controller.abort();
-  }, [client, backendUnavailable, visionUnavailable, refresh]);
+  }, [client, backendUnavailable, localInferenceUnavailable, cloudflareSelected, refresh]);
 
   useLayoutEffect(() => {
     if (!pending || !client) return;
@@ -106,12 +120,16 @@ export function ScreenAnalysisPage({
 
   useEffect(() => {
     const active = request.current;
-    if (active && !(active.mode === 'text' ? textReady : visionReady)) {
+    if (active && !modeReady(active.mode)) {
       active.controller.abort();
       request.current = null;
       setAnalyzing(false);
     }
-  }, [textReady, visionReady]);
+  }, [modeReady]);
+
+  useEffect(() => {
+    if (!cloudVisionReady) setCloudQuestion(null);
+  }, [cloudVisionReady]);
 
   useEffect(() => () => {
     request.current?.controller.abort();
@@ -119,7 +137,7 @@ export function ScreenAnalysisPage({
   }, []);
 
   function scheduleCapture(inspection: ScreenInspection) {
-    if (pendingCapture.current || request.current || !(inspection.mode === 'text' ? textReady : visionReady)) return;
+    if (pendingCapture.current || request.current || !modeReady(inspection.mode)) return;
     setError('');
     setSecondsLeft(COUNTDOWN_SECONDS);
     const capture = { inspection, captureAt: Date.now() + COUNTDOWN_SECONDS * 1000 };
@@ -132,7 +150,7 @@ export function ScreenAnalysisPage({
     setPending(null);
   }
 
-  const busy = pending !== null || analyzing;
+  const busy = pending !== null || analyzing || cloudQuestion !== null;
   const couldCheck = client !== null && !backendUnavailable;
 
   return (
@@ -174,10 +192,23 @@ export function ScreenAnalysisPage({
                   if (trimmed) scheduleCapture({ mode: 'vision', question: trimmed });
                 }}
               >
-                <h2 id="screen-vision-heading" className="font-medium">Vision model</h2>
-                <p className="text-sm" style={muted}>Ask your local vision model about the capture.</p>
-                {(visionUnavailable || (availability && !visionReady)) && (
-                  <p className="text-sm" style={muted}>Select and start a compatible local vision model in Settings.</p>
+                <h2 id="screen-vision-heading" className="font-medium">Ask about the screen</h2>
+                <p className="text-sm" style={muted}>
+                  {cloudflareSelected
+                    ? 'Gemma 4 can answer questions about an image you choose to send to Cloudflare.'
+                    : 'Ask about visible text with a local model, or use a vision model for images and layout.'}
+                </p>
+                {localInferenceUnavailable && !cloudflareSelected && (
+                  <p className="text-sm" style={muted}>Select and start a compatible local model in Settings.</p>
+                )}
+                {localModelReady && availability && !visionReady && (
+                  <p className="text-sm" style={muted}>Image analysis requires a compatible local Ollama vision model.</p>
+                )}
+                {localModelReady && availability && !textQuestionReady && (
+                  <p className="text-sm" style={muted}>Text questions require local text recognition and a compatible local model.</p>
+                )}
+                {cloudflareSelected && availability && !cloudVisionReady && (
+                  <p className="text-sm" style={muted}>Select Cloudflare Gemma 4 26B in Settings to enable image analysis.</p>
                 )}
                 <label htmlFor="screen-analysis-question" className="block text-sm font-medium">Question</label>
                 <textarea
@@ -190,15 +221,57 @@ export function ScreenAnalysisPage({
                   className="min-h-20 w-full resize-y rounded-lg border px-3 py-2 text-sm disabled:opacity-50"
                   style={{ ...border, background: 'var(--color-bg-secondary)' }}
                 />
-                <Button type="submit" disabled={!visionReady || busy || !question.trim()}>
-                  Capture and analyze
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  {cloudflareSelected ? (
+                    <Button
+                      type="button"
+                      disabled={!cloudVisionReady || busy || !question.trim()}
+                      onClick={() => setCloudQuestion(question.trim())}
+                    >
+                      Analyze with Cloudflare Gemma
+                    </Button>
+                  ) : (
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={!textQuestionReady || busy || !question.trim()}
+                        onClick={() => scheduleCapture({ mode: 'text-question', question: question.trim() })}
+                      >
+                        Ask about screen text
+                      </Button>
+                      <Button type="submit" disabled={!visionReady || busy || !question.trim()}>
+                        Capture and analyze
+                      </Button>
+                    </>
+                  )}
+                </div>
+                {cloudQuestion !== null && (
+                  <div role="group" aria-label="Confirm screen upload" className="space-y-3 rounded-lg border p-3" style={border}>
+                    <p className="text-sm">
+                      The full primary screen and your question will be sent to Cloudflare.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        disabled={!cloudVisionReady}
+                        onClick={() => {
+                          setCloudQuestion(null);
+                          scheduleCapture({ mode: 'cloud-vision', question: cloudQuestion, confirm_upload: true });
+                        }}
+                      >
+                        Capture and send once
+                      </Button>
+                      <Button type="button" variant="outline" onClick={() => setCloudQuestion(null)}>Cancel</Button>
+                    </div>
+                  </div>
+                )}
               </form>
             </div>
             {pending && (
               <div className="flex flex-wrap items-center gap-3">
                 <p role="status" className="text-sm" style={muted}>
-                  Capturing in {secondsLeft} {secondsLeft === 1 ? 'second' : 'seconds'}. Switch to the window you want to inspect.
+                  {pending.inspection.mode === 'cloud-vision' ? 'Capturing for Cloudflare' : 'Capturing'} in {secondsLeft} {secondsLeft === 1 ? 'second' : 'seconds'}. Switch to the window you want to inspect.
                 </p>
                 <Button variant="outline" onClick={cancelCapture}>Cancel capture</Button>
               </div>
@@ -211,7 +284,7 @@ export function ScreenAnalysisPage({
           <section aria-labelledby="screen-result-heading" className="space-y-3 rounded-xl border p-4" style={border}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 id="screen-result-heading" className="font-medium">
-                {result.mode === 'text' ? 'Screen text' : 'Analysis result'}
+                {result.mode === 'cloud-vision' ? 'Cloudflare analysis' : result.mode === 'text' ? 'Screen text' : 'Analysis result'}
               </h2>
               <Button variant="outline" onClick={() => setResult(null)}>Clear result</Button>
             </div>

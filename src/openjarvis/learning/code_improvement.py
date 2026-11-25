@@ -22,7 +22,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Mapping
@@ -48,8 +48,19 @@ _IGNORED_DIRS = {
     "target",
     "dist",
     "build",
+    ".ace-cargo",
+    ".ace-python",
+    ".ace-uv-cache",
+    ".ace-uv-tools",
 }
-_IGNORED_FILES = {".env", ".env.local", ".env.production"}
+_IGNORED_FILES = {
+    ".env",
+    ".env.local",
+    ".env.production",
+    "Instalar A.C.E.exe",
+    "Instalar-A.C.E.exe",
+    "Instalar ACE Offline.exe",
+}
 _MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
 _MAX_PATCH_BYTES = 2 * 1024 * 1024
 _MAX_APPLY_BACKUP_BYTES = 64 * 1024 * 1024
@@ -104,6 +115,8 @@ def generate_local_patch(
     task: str,
     files: tuple[str, ...],
     repository: str | Path,
+    *,
+    pinned_model: tuple[Any, str] | None = None,
 ) -> tuple[str, dict[str, str]]:
     """Generate a proposal patch from explicitly selected source files locally."""
     if not isinstance(task, str) or not task.strip() or len(task) > 4_000:
@@ -115,8 +128,20 @@ def generate_local_patch(
     if not root.is_dir():
         raise ValueError("Repository must be an existing directory.")
 
+    inference = (
+        nullcontext((*pinned_model, 4096))
+        if pinned_model is not None
+        else _configured_code_inference()
+    )
+    with inference as (engine, model, max_tokens):
+        return _request_code_patch(task, files, root, engine, model, max_tokens)
+
+
+@contextmanager
+def _configured_code_inference() -> Iterator[tuple[Any, str, int]]:
+    """Resolve and close the local model used by the interactive CLI."""
+
     from openjarvis.core.config import load_config
-    from openjarvis.core.types import Message, Role
     from openjarvis.engine._discovery import get_configured_engine
     from openjarvis.intelligence.model_catalog import register_builtin_models
 
@@ -138,22 +163,37 @@ def generate_local_patch(
             "and set intelligence.default_model in config.toml."
         )
     engine_key, engine = resolved
-    if getattr(engine, "is_cloud", False):
-        engine.close()
-        raise RuntimeError("Cloud engines are disabled for code proposals.")
-
     try:
-        available_models = engine.list_models()
-    except Exception as exc:
+        if getattr(engine, "is_cloud", False):
+            raise RuntimeError("Cloud engines are disabled for code proposals.")
+        try:
+            available_models = engine.list_models()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not list models on local engine {engine_key!r}."
+            ) from exc
+        model = next(
+            (name for name in configured_models if name in available_models), ""
+        )
+        model = model or (available_models[0] if available_models else "")
+        if not model:
+            raise RuntimeError(
+                f"The local engine {engine_key!r} has no available model."
+            )
+        yield engine, model, min(max(config.intelligence.max_tokens, 4096), 12000)
+    finally:
         engine.close()
-        raise RuntimeError(
-            f"Could not list models on local engine {engine_key!r}."
-        ) from exc
-    model = next((name for name in configured_models if name in available_models), "")
-    model = model or (available_models[0] if available_models else "")
-    if not model:
-        engine.close()
-        raise RuntimeError(f"The local engine {engine_key!r} has no available model.")
+
+
+def _request_code_patch(
+    task: str,
+    files: tuple[str, ...],
+    root: Path,
+    engine: Any,
+    model: str,
+    max_tokens: int,
+) -> tuple[str, dict[str, str]]:
+    from openjarvis.core.types import Message, Role
 
     blocks: list[str] = []
     source_hashes: dict[str, str] = {}
@@ -210,14 +250,12 @@ def generate_local_patch(
             ],
             model=model,
             temperature=0.15,
-            max_tokens=min(max(config.intelligence.max_tokens, 4096), 12000),
+            max_tokens=max_tokens,
         )
     except Exception as exc:
         if isinstance(exc, (RuntimeError, ValueError)):
             raise
         raise RuntimeError("Local code proposal generation failed.") from exc
-    finally:
-        engine.close()
 
     patch = str(response.get("content", "")).strip()
     if patch.startswith("```"):
@@ -660,6 +698,11 @@ def _copy_ignore(directory: str, names: list[str]) -> set[str]:
             _is_link_or_junction(path)
             or name in _IGNORED_DIRS
             or name in _IGNORED_FILES
+            or (
+                base.name == "binaries"
+                and base.parent.name == "src-tauri"
+                and (name == "ace-backend" or name.startswith(".ace-backend-"))
+            )
         ):
             ignored.add(name)
         elif is_sensitive_path(path):
@@ -817,7 +860,9 @@ def _require_validation(row: sqlite3.Row, expected_receipt: str | None = None) -
 class CodeImprovementManager:
     """Manage model-generated code proposals without editing the checkout."""
 
-    def __init__(self, db_path: str | Path | None = None) -> None:
+    def __init__(
+        self, db_path: str | Path | None = None, *, recover: bool = True
+    ) -> None:
         self.db_path = (
             Path(db_path) if db_path else get_config_dir() / "improvements.db"
         )
@@ -883,7 +928,8 @@ class CodeImprovementManager:
                 )"""
             )
 
-        self._recover_interrupted_applies()
+        if recover:
+            self._recover_interrupted_applies()
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

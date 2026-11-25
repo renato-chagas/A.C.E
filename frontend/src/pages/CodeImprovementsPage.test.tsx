@@ -23,6 +23,16 @@ const proposal: CodeImprovementProposal = {
 };
 
 describe('code improvement proposal review', () => {
+  it('provides a form to explicitly generate a proposal with a local model', () => {
+    const page = renderToStaticMarkup(<CodeImprovementsPage />);
+    expect(page).toContain('New code proposal');
+    expect(page).toContain('name="repository"');
+    expect(page).toContain('name="task"');
+    expect(page).toContain('name="files"');
+    expect(page).toContain('Generate proposal');
+    expect(page).toContain('Applying the patch requires separate confirmation');
+  });
+
   it('renders patch and report as literal text and requires no model on entry', () => {
     const page = renderToStaticMarkup(<CodeImprovementsPage />);
     expect(page).toContain('Code improvements');

@@ -5,6 +5,7 @@ import {
   type MonitorAnalysisResult,
   type MonitorAssessment,
   type MonitorIncident,
+  type MonitorReadings,
 } from '../lib/local-monitor';
 
 const muted = { color: 'var(--color-text-secondary)' };
@@ -19,6 +20,33 @@ const metrics = new Map([
 function MonitorTime({ value }: { value: string }) {
   const date = new Date(value);
   return <time dateTime={value}>{Number.isNaN(date.getTime()) ? value : date.toLocaleString()}</time>;
+}
+
+function LiveReadings({ readings }: { readings?: MonitorReadings }) {
+  const values = readings
+    ? [
+        { label: 'CPU usage', value: readings.cpu_percent, unit: '%' },
+        { label: 'Available RAM', value: readings.memory_available_gb, unit: ' GiB' },
+        { label: 'Free space on ACE data drive', value: readings.disk_free_gb, unit: ' GiB' },
+      ]
+    : null;
+  return (
+    <section aria-labelledby="monitor-readings" className="space-y-3">
+      <h2 id="monitor-readings" className="text-lg font-medium">Live resource usage</h2>
+      {values ? (
+        <dl className="grid gap-3 sm:grid-cols-3">
+          {values.map(({ label, value, unit }) => (
+            <div key={label} className="rounded-xl border p-4" style={border}>
+              <dt className="text-sm" style={muted}>{label}</dt>
+              <dd className="mt-1 text-xl font-semibold tabular-nums">
+                {value === null ? 'Unavailable' : value.toFixed(1) + unit}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : <p className="text-sm" style={muted}>Live readings are temporarily unavailable.</p>}
+    </section>
+  );
 }
 
 type MonitorChange = { enabled: boolean; notificationsEnabled?: boolean } | { incidentId: number };
@@ -156,7 +184,7 @@ export function LocalMonitorOverview({ status, change = null, onChange, analysis
           {statusText}
         </p>
         <p className="text-sm" style={muted}>
-          ACE checks CPU use, available memory and free disk space. Resource alerts are saved on this computer.
+          Resource monitoring works with any chat provider. Alerts are saved on this computer.
         </p>
         {status.externally_managed ? (
           <p className="text-sm" style={muted}>
@@ -198,6 +226,8 @@ export function LocalMonitorOverview({ status, change = null, onChange, analysis
           </>
         )}
       </section>
+
+      {status.enabled && <LiveReadings readings={status.readings} />}
 
       <section aria-labelledby="monitor-history" className="space-y-3">
         <h2 id="monitor-history" className="text-lg font-medium">Recent alerts</h2>
